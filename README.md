@@ -52,7 +52,7 @@ Requirements:
 - Python 3.12 recommended;
 - Poppler (`pdftoppm`/`pdftocairo`) for PDF rendering;
 - Tesseract plus English/French language data for scanned-page OCR;
-- Microsoft/Google/Anthropic API keys only if optional external AI features are enabled.
+- Microsoft/Google/Anthropic API keys only if optional external AI features are enabled. Provider SDKs are listed in `requirements.txt`; no keys are required for the local analyzer or app startup.
 
 Create an environment and install dependencies:
 

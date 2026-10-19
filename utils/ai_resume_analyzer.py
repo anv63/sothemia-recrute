@@ -6,7 +6,15 @@ import builtins
 if not hasattr(builtins, "xrange"):
     builtins.xrange = range
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ImportError:  # Optional provider; the local analyzer must still start without it.
+    OpenAI = None
+
+try:
+    from anthropic import Anthropic
+except ImportError:  # Optional provider; the local analyzer must still start without it.
+    Anthropic = None
 from utils import document_extractor
 import pdfplumber
 from pdf2image import convert_from_path
@@ -30,9 +38,9 @@ class AIResumeAnalyzer:
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         
         self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-        self.openai_client = OpenAI(api_key=self.openai_api_key) if self.openai_api_key else None
+        self.openai_client = OpenAI(api_key=self.openai_api_key) if self.openai_api_key and OpenAI else None
         self.anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
-        self.anthropic_client = Anthropic(api_key=self.anthropic_api_key) if self.anthropic_api_key else None
+        self.anthropic_client = Anthropic(api_key=self.anthropic_api_key) if self.anthropic_api_key and Anthropic else None
     
     def extract_text_from_pdf(self, pdf_file):
         """Compatibility wrapper around the layout-aware document extractor."""
