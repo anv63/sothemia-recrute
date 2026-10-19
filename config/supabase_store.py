@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlparse
 
 import streamlit as st
 
@@ -45,7 +46,12 @@ def require_config():
         raise SupabaseConfigurationError(
             "Supabase mode requires [supabase].url and [supabase].service_role_key in Streamlit secrets."
         )
-    return url, key, bucket
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc or not parsed.netloc.endswith(".supabase.co"):
+        raise SupabaseConfigurationError("Supabase URL must look like https://<project-ref>.supabase.co.")
+    if not bucket:
+        raise SupabaseConfigurationError("Supabase storage_bucket must not be empty.")
+    return url.rstrip("/"), key, bucket
 
 
 @lru_cache(maxsize=2)
@@ -99,6 +105,11 @@ def health() -> dict[str, Any]:
         table("ats_candidates").select("id").limit(1).execute()
         bucket = storage_bucket()
         client().storage.from_(bucket).list(path="", options={"limit": 1})
-        return {"backend": "Supabase Postgres + Storage", "ok": True, "bucket": bucket}
+        parsed = urlparse(_setting("url"))
+        project_ref = parsed.netloc.split(".", 1)[0] if parsed.netloc else "unknown"
+        return {"backend": "Supabase Postgres + Storage", "ok": True, "bucket": bucket,
+                "project_ref": project_ref}
     except Exception as exc:
-        return {"backend": "Supabase Postgres", "ok": False, "error": str(exc)[:240]}
+        return {"backend": "Supabase Postgres", "ok": False, "project_ref":
+                (urlparse(_setting("url")).netloc.split(".", 1)[0] if _setting("url") else "unknown"),
+                "error": str(exc)[:240]}

@@ -221,7 +221,19 @@ def page_login(app):
         st.html('<div class="so-login-brand"><div class="so-eyebrow">Sothema · HR Intelligence</div>'
                 '<h1 class="so-title">Espace recrutement</h1>'
                 '<div class="so-subtitle">Accès réservé aux équipes RH autorisées.</div></div>')
-        if admin_count() == 0:
+        try:
+            count = admin_count()
+        except Exception as exc:
+            st.error(f"Impossible de vérifier les comptes RH dans le stockage configuré : {exc}",
+                     title="Base de données indisponible")
+            st.caption("La création du premier compte est désactivée tant que le backend n'est pas joignable.")
+            return
+        if store.backend_name() == "supabase":
+            from config.supabase_store import require_config
+            from urllib.parse import urlparse
+            project_ref = urlparse(require_config()[0]).netloc.split(".", 1)[0]
+            st.caption(f"Backend connecté : Supabase · projet `{project_ref}` · {count} compte(s) RH")
+        if count == 0:
             _first_run_setup()
         else:
             _login_form()
@@ -1112,7 +1124,10 @@ def _settings_data():
         if not health.get("ok"):
             st.error(f"Backend inaccessible : {health.get('error', 'erreur inconnue')}", title="État du stockage")
         else:
-            st.success(f"Backend opérationnel : {health.get('backend', 'SQLite local')}", icon=":material/cloud_done:")
+            backend_label = health.get("backend", "SQLite local")
+            if health.get("project_ref"):
+                backend_label += f" · projet {health['project_ref']}"
+            st.success(f"Backend opérationnel : {backend_label}", icon=":material/cloud_done:")
         if stats.get("backend") == "supabase":
             st.html(f'<div class="so-mono">Supabase Postgres · private Storage bucket: {esc(stats.get("bucket", "candidate-cvs"))}</div>')
             st.caption("Dossiers, comptes RH et audit sont stockés dans Supabase Postgres ; les CV originaux sont dans le bucket privé. "

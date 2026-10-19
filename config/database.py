@@ -384,8 +384,11 @@ def add_admin(email, password):
 def admin_count():
     """Number of accounts allowed to sign in."""
     if supabase_store.backend_name() == "supabase":
-        response = supabase_store.table("admin").select("id", count="exact").execute()
-        return int(getattr(response, "count", 0) or 0)
+        response = supabase_store.table("admin").select("id", count="exact").limit(1).execute()
+        total = getattr(response, "count", None)
+        if total is None:
+            raise RuntimeError("Supabase did not return an exact admin row count.")
+        return int(total)
     conn = get_database_connection()
     try:
         return conn.execute('SELECT COUNT(*) FROM admin').fetchone()[0]
