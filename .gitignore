@@ -1,0 +1,75 @@
+# Python bytecode, caches, test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.coverage*
+htmlcov/
+
+# Python environments, package and build outputs
+.venv/
+.venv-*/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+utils/.env
+.streamlit/secrets.toml
+.streamlit/*secrets*.toml
+
+# Local Streamlit config is included, but keep runtime secrets excluded
+.streamlit/*
+!.streamlit/config.toml
+
+# Candidate data, local databases, uploads, backups, and exports
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+backups/
+**/backups/
+uploads/
+data/cv_files/
+Data/
+**/Data/
+resume_data_export.xlsx
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.docx
+*.doc
+
+# Local runtime and temporary files
+*.log
+*.tmp
+*.temp
+temp/
+/tmp/
+node_modules/
+**/node_modules/
+reference/react-design/dist/
+
+# Machine-local assistant/editor configs
+.agents/
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Large downloaded tools
+poppler.zip
+poppler/
+chromedriver
+chromedriver.exe

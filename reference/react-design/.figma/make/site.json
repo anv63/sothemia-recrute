@@ -1,0 +1,10 @@
+{
+  "description": "Streamline HR recruitment with an intelligent applicant tracking system that organizes, analyzes, and matches candidate CVs for efficient hiring.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

@@ -1,0 +1,764 @@
+SOTHEMA HR INTELLIGENCE
+========================
+Project description, architecture, operation and maintenance guide
+
+Document purpose
+----------------
+This file describes the current Sothema HR Intelligence application: what it is,
+who it is for, how CVs move through the system, how the score and confidence are
+calculated, where data is stored, how the application is launched, and what remains
+necessary for production operation.
+
+This is an internal RH / recruiter application. It is not a candidate-facing resume
+builder and it is not intended to be used by applicants.
+
+
+1. PRODUCT PURPOSE
+------------------
+Sothema HR Intelligence is a local Applicant Tracking System (ATS) for authorized
+RH managers and recruiters. It provides a CVthèque where recruiters can:
+
+- sign in through an RH administrator account;
+- import real PDF and DOCX CVs;
+- extract text from ordinary and visually designed CVs;
+- handle multi-column layouts, tables, DOCX headers/footers and text boxes;
+- analyze CV structure with the existing local ResumeAnalyzer;
+- see an advisory score and extraction-confidence indicators;
+- review the exact evidence extracted from the CV;
+- search and filter imported records;
+- mark records with an RH review status;
+- validate an analysis after human review;
+- write recruiter notes;
+- inspect audit history;
+- export CVthèque data;
+- optionally run a pseudonymized external AI analysis when configured;
+- keep the original CV file and all analysis data in local SQLite storage.
+
+The application does not automatically reject, invite, rank, or hire candidates.
+All scores are recommendations for reading assistance. A recruiter must inspect the
+original source and validate any conclusion.
+
+The application starts with an empty candidate database. It never creates seeded,
+demo, fake, or placeholder candidates.
+
+
+2. CURRENT USER INTERFACE
+-------------------------
+The active frontend is the Streamlit application in:
+
+    Smart-AI-Resume-Analyzer-main/app.py
+
+The React project under "HR Applicant Tracking System" is only a visual/product
+reference. It is not a second production application and is not the source of
+candidate data.
+
+The current RH navigation contains only:
+
+Recruitment
+- Tableau de bord
+- CVthèque
+- Importer des CV
+- Dossier candidat (opened from a row or import result)
+
+Administration
+- Paramètres
+  - Journal d'audit
+  - Données locales
+  - Comptes
+  - IA & éthique
+
+Applicant-oriented pages were deliberately removed from the navigation:
+
+- Générateur de CV
+- Offres d'emploi
+- Retours utilisateurs
+
+The older implementation for some of those tools remains in app.py for legacy
+compatibility, but it is not registered in the active navigation and is not part of
+the RH product flow.
+
+
+3. APPLICATION STARTUP
+----------------------
+Project directory:
+
+    /home/anouarov/Music/sothema/Smart-AI-Resume-Analyzer-main
+
+Python environment:
+
+    .venv-final
+
+Normal launch command:
+
+    cd /home/anouarov/Music/sothema/Smart-AI-Resume-Analyzer-main
+    .venv-final/bin/python -m streamlit run app.py \
+        --server.port 8501 \
+        --server.address 127.0.0.1
+
+Application URL:
+
+    http://127.0.0.1:8501
+
+The application uses the production SQLite database beside the code:
+
+    resume_data.db
+
+For automated tests, use a separate database without touching production:
+
+    SOTHEMA_DB_PATH=/tmp/sothema-test.db \
+    .venv-final/bin/python -m streamlit run app.py \
+        --server.port 8501 \
+        --server.address 127.0.0.1
+
+The SOTHEMA_DB_PATH environment variable is supported by config/database.py and
+ats_store.py.
+
+
+4. AUTHENTICATION AND ACCOUNTS
+------------------------------
+The application has a login gate before candidate data or application pages are
+shown.
+
+The administrator account is stored in the admin table in resume_data.db. Passwords
+are stored as salted PBKDF2-SHA256 hashes. The plaintext password is not stored in
+the database.
+
+On a new empty installation, the first screen allows an authorized RH manager to
+create the first administrator account. Requirements:
+
+- valid e-mail address;
+- password of at least 10 characters;
+- password confirmation.
+
+After that, additional accounts can be created from Paramètres > Comptes. An RH
+manager can also change their own password. Login failures are audited and repeated
+failures are temporarily rate-limited in the Streamlit session.
+
+The application records login and logout events in both the legacy admin_logs table
+(where applicable) and the ATS audit log.
+
+For security, credentials should be supplied directly at login or through a secure
+password manager. Do not commit passwords to this documentation file, source code,
+Git, screenshots, or deployment scripts.
+
+
+5. MAIN FILES AND RESPONSIBILITIES
+----------------------------------
+app.py
+    Streamlit entrypoint. Sets page configuration, initializes databases, creates
+    the Streamlit Page navigation, applies the Sothema theme, and starts the login
+    gate. It retains legacy resume-builder/AI utility code but only active RH pages
+    are registered in the current navigation.
+
+sothema_views.py
+    Active RH UI and workflow. Contains login/setup UI, dashboard, CVthèque,
+    synchronous import flow, candidate dossier, evidence display, RH review actions,
+    audit/settings pages, export actions, and API-independent orchestration.
+
+sothema_ui.py
+    Sothema visual system: colors, typography, layout CSS, badges, empty states,
+    score badges, confidence badges, sidebar status, and safe display helpers.
+
+.streamlit/config.toml
+    Light Sothema theme configuration: colors, fonts, radii, borders, chart colors,
+    upload size, and server/browser settings.
+
+ats_store.py
+    Authoritative ATS persistence layer. Owns the ATS SQLite schema, migrations,
+    transaction boundaries, candidate queries, SHA-256 duplicate detection, review
+    statuses, notes, audit log, backups, and storage statistics.
+
+config/database.py
+    Legacy application database helpers plus administrator account functions. It
+    initializes legacy tables and manages PBKDF2 administrator passwords.
+
+utils/document_extractor.py
+    New layout-aware extraction service. It has no Streamlit UI and does not score
+    candidates. It returns normalized text, page/line provenance, extraction
+    methods, table information, warnings, OCR status, and semantic signals.
+
+utils/resume_analyzer.py
+    Existing local rule-based analyzer. It calculates the advisory ATS score and
+    extracts sections such as name, contact information, summary, experience,
+    education, projects, skills, and suggestions.
+
+utils/ai_resume_analyzer.py
+    AI provider integration and compatibility extraction wrappers. The extraction
+    wrappers now call document_extractor. Optional external AI analysis is only
+    started from a candidate dossier and only when an API key is configured.
+
+sothema_quality.py
+    Fairness and extraction-quality boundary. Removes protected attributes before
+    scoring, identifies plausible names, cleans skills, calculates field/readability/
+    semantic confidence, creates evidence citations, sanitizes search terms, and
+    pseudonymizes text before external AI use.
+
+ats_api.py
+    Optional local Flask API. It now shares the same extraction, quality, scoring,
+    and SQLite pipeline as Streamlit rather than returning hard-coded confidence or
+    metadata.
+
+ui_components.py and style/style.css
+    Older visual helpers retained for legacy utility pages. They are not the active
+    Sothema design source; the active pages use sothema_ui.py and config.toml.
+
+requirements.txt
+    Python dependencies. lxml is required for DOCX XML parsing. Poppler and
+    Tesseract are system-level dependencies, not Python packages.
+
+
+tests/test_document_extractor.py
+    Regression tests for synthetic two-column PDFs, DOCX tables/headers, semantic
+    analysis, provenance, and invalid/incomplete documents.
+
+
+6. END-TO-END CV IMPORT FLOW
+----------------------------
+The active import function is ingest_file in sothema_views.py.
+
+For every uploaded file, the order is:
+
+Step 1: filename and format validation
+    Only .pdf and .docx are accepted. The name is normalized to a safe basename.
+
+Step 2: size and signature validation
+    Empty files are rejected. Files larger than 10 MB are rejected. The binary
+    signature is checked: PDF files must begin with %PDF and DOCX files must be ZIP
+    containers beginning with PK.
+
+Step 3: exact duplicate check
+    SHA-256 is calculated from the original bytes. If the same hash already exists,
+    the upload is rejected as an exact duplicate and the existing dossier ID is
+    shown. No new candidate row is created.
+
+Step 4: layout-aware extraction
+    document_extractor.extract_document is called. It extracts the document without
+    changing the original bytes.
+
+Step 5: normalization and metadata collection
+    Unicode and common encoding artifacts are normalized. Page boundaries, columns,
+    tables, methods, warnings, and source lines are preserved in extraction metadata.
+
+Step 6: fairness filtering
+    Protected-attribute mentions are removed from the text sent to the scoring
+    analyzer. These attributes are:
+
+    - age;
+    - gender;
+    - nationality;
+    - family status;
+    - photo-related information.
+
+Step 7: local analysis
+    ResumeAnalyzer analyzes the protected-attribute-free normalized text. The result
+    includes the existing ATS score, extracted sections, skills, missing information,
+    format suggestions, and section scores.
+
+Step 8: document classification
+    The system uses tolerant CV signals rather than requiring one exact template.
+    Signals include contact details, professional links, section headings, dates,
+    role language, bullets, columns, and tables. Strongly recognizable certificates,
+    marksheets, and identity documents remain rejected. An unusual but readable CV
+    can be retained for human review with a warning instead of being discarded.
+
+Step 9: confidence calculation
+    Field confidence, readability confidence, and semantic confidence are combined.
+    See the dedicated confidence section below.
+
+Step 10: transactional persistence
+    The original bytes, extracted text, analysis JSON, score, confidence, and audit
+    event are written in one SQLite transaction. If persistence fails, the candidate
+    is not confirmed.
+
+Step 11: read-after-write verification
+    The inserted row is read back from SQLite before the UI says the dossier is
+    complete. The import result then shows the persisted candidate ID and extraction
+    metadata.
+
+
+7. LAYOUT-AWARE EXTRACTION
+--------------------------
+PDF extraction
+--------------
+PDF pages are opened with pdfplumber. Words are read with coordinates. The extractor
+uses those coordinates to group words into visual lines and identify likely left/right
+columns. Designed CVs therefore do not automatically become an unreadable sequence
+that alternates between the left and right side of the page.
+
+The extractor also tries PDF table extraction. Table rows are represented with cell
+separators and marked as table content. The system avoids duplicating table text when
+it is already present in the normal word stream.
+
+For malformed but readable PDFs, pdftotext -layout is a fallback.
+
+For pages with no usable text, the extractor attempts OCR only when Tesseract is
+installed. If Tesseract is unavailable, the result contains an ocr_unavailable
+warning and the page is marked for manual review. The application never invents
+fields from an unreadable page.
+
+DOCX extraction
+---------------
+DOCX files are ZIP/XML packages. The extractor reads document.xml in document order
+and handles:
+
+- normal paragraphs;
+- tables and table rows/cells;
+- section headers and footers;
+- text embedded in XML structures such as text boxes where possible;
+- cell boundaries and extraction method metadata.
+
+The high-level python-docx API is still used elsewhere for legacy features, but ATS
+import uses the XML-aware service.
+
+Normalized markers
+------------------
+The analysis text can contain markers such as:
+
+    [PAGE 2]
+    [COLUMN 1]
+    [COLUMN 2]
+    [TABLE]
+    [OCR]
+
+These markers help preserve structure for the analyzer and are included in source
+metadata. Recruiter evidence links back to page and line positions where available.
+
+Repeated headers and footers
+----------------------------
+Lines repeated at page edges across a multi-page PDF can be removed from the analysis
+stream. Their removal is recorded in extraction warnings so the transformation is
+visible and auditable.
+
+
+8. CONFIDENCE METRICS
+---------------------
+Confidence is extraction confidence. It is not candidate quality, hiring probability,
+or a recommendation.
+
+The current metadata contains:
+
+- field_confidence;
+- field_average;
+- readability_confidence;
+- semantic_confidence;
+- confidence_reasons;
+- extraction warnings and methods.
+
+Field confidence
+----------------
+The fields include name, e-mail, phone, skills, experience, education, and text.
+Examples of rules:
+
+- a plausible detected name receives a strong name confidence;
+- a valid e-mail pattern receives full e-mail confidence;
+- a phone with enough digits receives full phone confidence;
+- skills receive a value based on the number of cleaned skills, capped at 1.0;
+- detected experience and education sections receive positive confidence;
+- readable source coverage contributes to text confidence.
+
+Readability confidence
+----------------------
+Readability confidence considers the amount of meaningful extracted text relative to
+page count, whether structured extraction succeeded, and whether pages are empty or
+required OCR.
+
+Semantic confidence
+-------------------
+Semantic confidence considers whether the document contains enough independent CV
+signals: contact information, section headings, date patterns, professional role
+language, tables, columns, and other structured content.
+
+Combined confidence
+-------------------
+The combined confidence is calculated in sothema_quality.py using a weighted blend:
+
+    50% field average
+    30% readability confidence
+    20% semantic confidence
+
+Display thresholds:
+
+    80% and above       Confiance élevée
+    60% to 79%          Confiance moyenne
+    Below 60%          Faible confiance
+
+A low-confidence record is not automatically deleted. It remains available for RH
+review with explanations such as missing e-mail, OCR required, empty pages, or
+insufficient structured sections.
+
+
+9. LOCAL ATS SCORE
+------------------
+The existing ResumeAnalyzer remains the score source of truth. Its local ATS score
+uses these approximate weights:
+
+- contact information: 10%;
+- professional summary: 10%;
+- skills / required-skill match: 30%;
+- experience: 20%;
+- education: 10%;
+- formatting: 20%.
+
+Without selected job criteria, required-skill matching has no required skills to
+match and therefore does not provide a job-specific comparison. Recruiters can use
+“Comparer à des critères de poste” from a dossier to run the local analyzer with
+configured role requirements.
+
+The score is advisory only. The UI always states that RH must review the original CV,
+evidence, and context.
+
+
+10. FAIRNESS AND ETHICS
+-----------------------
+The application is designed to support human review, not automated employment
+decisions.
+
+Protected attributes are not used for scoring, ranking, or search:
+
+- age;
+- gender;
+- nationality;
+- family status;
+- photo.
+
+The quality layer redacts these mentions from the scoring text before ResumeAnalyzer
+runs. Search queries containing protected terms are flagged and those terms are
+ignored. The dossier may still show that protected mentions were encountered, because
+transparency is useful, but they cannot influence the score.
+
+External AI behavior
+--------------------
+External AI is optional. If configured, the dossier sends pseudonymized text rather
+than the original file. Name, e-mail, phone, and professional links are replaced with
+placeholders. Protected attributes are removed before the request. API keys are read
+from environment configuration and should never be placed in the database or UI.
+
+Human review controls
+---------------------
+Each candidate can have an RH status:
+
+- À examiner;
+- En revue;
+- Présélectionné;
+- En attente;
+- Archivé.
+
+A recruiter can explicitly mark an analysis as validated. This records the reviewer
+and time in the candidate row and audit log.
+
+
+11. SQLITE STORAGE
+------------------
+The authoritative ATS database is:
+
+    resume_data.db
+
+The ATS tables are:
+
+ats_candidates
+    Candidate dossier and original file. Important columns include:
+
+    - id;
+    - fingerprint (unique SHA-256 hash);
+    - source_filename;
+    - original_file (BLOB);
+    - file_type;
+    - file_size;
+    - full_name, email, phone, summary;
+    - raw_text;
+    - structured_json;
+    - local_analysis_json;
+    - ai_analysis_json;
+    - score;
+    - confidence;
+    - processing;
+    - review;
+    - notes;
+    - reviewed_by and reviewed_at;
+    - target_role;
+    - created_by, created_at, updated_at.
+
+ats_audit_log
+    Append-only event history. It records imports, rejected files, duplicate events,
+    review changes, validations, notes metadata, exports, logins, and other relevant
+    actions. Note contents are not stored in audit details; only note length is logged.
+
+Other legacy tables
+-------------------
+resume_data.db also contains older resume-builder and legacy analysis tables because
+this application grew from an older Smart Resume AI project. They are not the source
+of truth for the active CVthèque. The active ATS records are in ats_candidates and
+ats_audit_log.
+
+The project previously contained demo/legacy data. It was backed up and purged before
+the RH CVthèque was made active. Production ATS candidate storage starts empty and
+only real uploads should create ats_candidates rows.
+
+
+12. SEARCH, FILTERING AND EVIDENCE
+-----------------------------------
+CVthèque search covers stored name, e-mail, source filename, target role, and raw CV
+text. It supports filters for:
+
+- RH review status;
+- confidence;
+- analysis validation;
+- skill;
+- minimum score.
+
+Protected query terms are identified before searching and ignored for fairness.
+
+Candidate evidence includes:
+
+- extracted field;
+- extracted value;
+- exact source quote where found;
+- page and line location when extraction provenance is available.
+
+This lets an RH manager compare the analysis with the actual CV rather than trusting
+an opaque model output.
+
+
+13. AUDIT AND DATA OPERATIONS
+-----------------------------
+The Paramètres page provides:
+
+Journal d'audit
+    Search and filter append-only events, then export the visible audit rows.
+
+Données locales
+    Show candidate count, audit count, database size, original file size, export CSV,
+    export Excel, and create a consistent SQLite backup.
+
+Comptes
+    List administrator e-mails, create RH accounts, and change the current password.
+
+IA & éthique
+    Show fairness principles, score weighting, configured provider status, and local
+    versus external analysis behavior.
+
+Exports contain personal data and must be handled securely.
+
+
+14. OPTIONAL LOCAL API
+----------------------
+ats_api.py exposes an optional Flask API when started directly:
+
+    .venv-final/bin/python ats_api.py
+
+Default address:
+
+    http://127.0.0.1:5000
+
+Endpoints:
+
+GET /api/health
+    Returns service health and extraction capability status.
+
+GET /api/candidates?q=...
+    Returns stored candidate records.
+
+GET /api/candidates/<id>
+    Returns one stored candidate.
+
+POST /api/candidates/upload
+    Accepts a PDF or DOCX multipart file and uses the same layout-aware extraction,
+    fairness layer, local analyzer, confidence metadata, and transactional store.
+
+POST /api/candidates/<id>/ai-analysis
+    Stores an externally produced AI result for an existing candidate. Provider
+    access control and key handling should be enforced by the deployment boundary.
+
+The API is optional; Streamlit remains the authoritative application UI.
+
+
+15. DEPENDENCIES AND SYSTEM CAPABILITIES
+----------------------------------------
+Python dependencies include:
+
+- Streamlit;
+- pandas;
+- python-docx;
+- lxml;
+- pdfplumber;
+- pypdf / PyPDF2;
+- pdfminer.six;
+- pdf2image;
+- pytesseract;
+- openpyxl;
+- Flask and Flask-CORS;
+- optional AI provider SDKs.
+
+System tools:
+
+- Poppler: pdftoppm/pdftocairo for rendering PDF pages;
+- pdftotext for layout-preserving PDF fallback;
+- Tesseract OCR for image-only/scanned pages.
+
+Install OCR on Debian/Ubuntu:
+
+    sudo apt-get update
+    sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra
+
+The application reports capabilities in Paramètres > Données locales and through
+/api/health. If Tesseract is not installed, text-based PDFs and designed text PDFs
+still work; image-only pages are marked for manual review.
+
+
+16. TESTING AND VERIFICATION
+----------------------------
+Compile the active Python modules:
+
+    .venv-final/bin/python -m compileall -q \
+        app.py sothema_views.py sothema_quality.py ats_api.py utils
+
+Run extraction tests:
+
+    SOTHEMA_DB_PATH=/tmp/sothema-extractor-test.db \
+    .venv-final/bin/python -m pytest -q tests/test_document_extractor.py
+
+The current regression suite covers:
+
+- synthetic two-column PDF extraction;
+- PDF page count and source-line provenance;
+- DOCX table extraction;
+- DOCX header/footer extraction;
+- semantic analysis of structured documents;
+- invalid/incomplete extraction behavior.
+
+Run a Streamlit headless smoke test with a scratch database:
+
+    SOTHEMA_DB_PATH=/tmp/sothema-app-test.db \
+    .venv-final/bin/python -m streamlit run app.py \
+        --server.port 8501 \
+        --server.address 127.0.0.1
+
+Never use production resume_data.db for destructive tests. Use SOTHEMA_DB_PATH.
+
+Recommended manual acceptance test:
+
+1. Open the application and sign in as an RH administrator.
+2. Import a normal one-column PDF.
+3. Import a two-column designed PDF.
+4. Import a PDF containing a table.
+5. Import a DOCX containing a table and header/footer.
+6. Inspect extraction methods, page count, warnings and confidence.
+7. Open the dossier and compare evidence quotes with the source text.
+8. Mark the analysis as validated.
+9. Restart Streamlit and confirm the dossier remains in SQLite.
+10. Upload the same file again and confirm exact duplicate rejection.
+11. Search with a protected term and confirm it is ignored.
+12. Inspect the audit log for import, review, validation and duplicate events.
+
+
+17. TROUBLESHOOTING
+-------------------
+Login screen says no account exists
+    Create the first RH administrator account through the displayed setup form.
+
+Login credentials no longer work
+    Use Paramètres > Comptes after signing in with another administrator, or update
+    the admin password through a controlled database recovery procedure. Do not edit
+    plaintext passwords into SQLite.
+
+No candidates appear
+    Confirm that the app is using the intended database path. The production path is
+    Smart-AI-Resume-Analyzer-main/resume_data.db. A test process may be using
+    SOTHEMA_DB_PATH instead.
+
+Designed PDF is accepted but confidence is low
+    Inspect extraction warnings and the source text. Low confidence can mean missing
+    contact data, a page that required OCR, unreadable pages, or incomplete CV
+    signals. The record is intentionally retained for RH verification.
+
+Scanned PDF has no fields
+    Install and verify Tesseract. Check Paramètres > Données locales. Without OCR,
+    the application must not fabricate fields.
+
+Candidate upload creates no record
+    This is expected for invalid signatures, empty files, unsupported documents,
+    unreadable documents, exact duplicates, or clearly detected non-CVs. The import
+    queue and audit log contain the reason.
+
+Streamlit import error after code changes
+    Compile modules and inspect the server log:
+
+        .venv-final/bin/python -m compileall -q app.py sothema_views.py sothema_quality.py utils
+        tail -100 /tmp/sothema-streamlit.log
+
+
+18. DESIGN AND BRANDING
+-----------------------
+The interface follows the React Sothema reference design while remaining a single
+Streamlit product.
+
+Main design tokens:
+
+- navy ink: #0B1F3A;
+- canvas: #F4F6F9;
+- surface: #FFFFFF;
+- blue brand: #007EB5 / #183A73;
+- teal accent: #0D8178;
+- green success: #12804F;
+- orange warning: #A35B00;
+- red error: #B42318;
+- violet AI: #5B4BC4.
+
+The active design is implemented in sothema_ui.py and .streamlit/config.toml.
+The logo is stored as assets/sothema-logo.png.
+
+
+19. SECURITY AND DATA HANDLING CHECKLIST
+----------------------------------------
+Before production deployment:
+
+- protect resume_data.db with filesystem permissions;
+- keep backups encrypted and access-controlled;
+- do not expose Streamlit beyond a trusted network without an authentication and
+  reverse-proxy plan;
+- use HTTPS for any remote deployment;
+- keep API keys out of source control and SQLite;
+- rotate the initial administrator password;
+- do not share exports casually because they contain personal data;
+- install only trusted Python and system packages;
+- verify OCR and extraction tools in a controlled environment;
+- retain audit logs according to Sothema/CNDP policy;
+- have recruiters validate analyses and evidence before acting;
+- never use the advisory score as an automatic hiring rule.
+
+
+20. CURRENT LIMITATIONS
+-----------------------
+- OCR requires the system Tesseract executable; Python pytesseract alone is not
+  sufficient.
+- PDF visual reading order is heuristic because PDF files do not contain a universal
+  semantic document structure.
+- Some proprietary Word shapes or unusual embedded objects may still require manual
+  review.
+- The local ResumeAnalyzer remains rule-based and should not be treated as a modern
+  semantic hiring model.
+- Experience years, city, department and some detailed profile fields are not yet
+  normalized into dedicated ATS columns for every possible CV format.
+- External AI providers are optional and provider availability depends on configured
+  keys and network policy.
+- The React project remains a reference and is not a maintained competing frontend.
+
+
+21. SOURCE OF TRUTH SUMMARY
+---------------------------
+For active RH behavior, use this chain:
+
+    app.py
+      -> sothema_views.py
+        -> utils/document_extractor.py
+        -> sothema_quality.py
+        -> utils/resume_analyzer.py
+        -> ats_store.py
+          -> resume_data.db
+
+Original CV bytes are stored in ats_candidates.original_file.
+The active local analysis is stored in ats_candidates.local_analysis_json.
+Extraction metadata and provenance are stored inside the sothema object in that JSON.
+Audit events are stored in ats_audit_log.
+
+This chain is the authoritative Sothema HR Intelligence application.

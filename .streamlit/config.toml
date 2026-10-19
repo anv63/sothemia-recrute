@@ -1,0 +1,47 @@
+# Sothema HR Intelligence — tokens mirrored from "HR Applicant Tracking System/src/index.css".
+[theme]
+base = "light"
+primaryColor = "#007EB5"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0B1F3A"
+linkColor = "#007EB5"
+linkUnderline = false
+borderColor = "#C9D2DE"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"
+buttonRadius = "6px"
+baseFontSize = 14
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+codeFont = "IBM Plex Mono:https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+headingFontSizes = ["24px", "18px", "15px", "14px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+metricValueFontSize = "28px"
+metricValueFontWeight = 600
+blueColor = "#007EB5"
+greenColor = "#12804F"
+orangeColor = "#A35B00"
+redColor = "#B42318"
+violetColor = "#5B4BC4"
+grayColor = "#5B6B82"
+codeBackgroundColor = "#F8FAFC"
+dataframeHeaderBackgroundColor = "#F8FAFC"
+dataframeBorderColor = "#E3E8EF"
+chartCategoricalColors = ["#007EB5", "#00A5D6", "#183A73", "#12804F", "#5B4BC4", "#A35B00", "#B42318"]
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F9"
+borderColor = "#E3E8EF"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "none"
+
+[server]
+maxUploadSize = 10
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
