@@ -1,9 +1,9 @@
 """
 Sothema HR Intelligence — Streamlit application (single source of truth).
 
-CV extraction and scoring come from utils/; persistence from ats_store (SQLite).
-The Sothema pages live in sothema_views; the legacy tools below are kept as
-complementary utilities.
+Sothema pages live in sothema_views; ATS persistence uses SQLite locally or Supabase
+for the hosted proof of concept. Legacy utilities remain available in code but not in
+the active RH navigation.
 """
 import time
 from PIL import Image
@@ -93,8 +93,10 @@ class ResumeApp:
         if 'is_admin' not in st.session_state:
             st.session_state.is_admin = False
 
-        # Initialize dashboard manager
-        self.dashboard_manager = DashboardManager()
+        # The active Sothema dashboard reads ATS records directly. Avoid opening the
+        # legacy dashboard's SQLite connection in hosted Supabase mode.
+        from config.supabase_store import backend_name
+        self.dashboard_manager = None if backend_name() == "supabase" else DashboardManager()
 
         self.analyzer = ResumeAnalyzer()
         self.ai_analyzer = AIResumeAnalyzer()

@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 
+from config import supabase_store
+
 # SOTHEMA_DB_PATH lets tests run against a scratch copy; production uses resume_data.db.
 DB_PATH = Path(os.environ.get('SOTHEMA_DB_PATH') or Path(__file__).resolve().parent.parent / 'resume_data.db')
 
@@ -34,12 +36,17 @@ def _verify_password(password, stored):
 
 
 def get_database_connection():
-    """Create a connection to the application's database beside the project."""
-    conn = sqlite3.connect(DB_PATH)
-    return conn
+    """Create a connection to the legacy local SQLite database."""
+    if supabase_store.backend_name() == "supabase":
+        raise supabase_store.SupabaseConfigurationError(
+            "Legacy resume-builder tables are disabled in Supabase ATS mode."
+        )
+    return sqlite3.connect(DB_PATH)
 
 def init_database():
-    """Initialize database tables"""
+    """Initialize legacy tables only for local development."""
+    if supabase_store.backend_name() == "supabase":
+        return
     conn = get_database_connection()
     cursor = conn.cursor()
     
@@ -221,7 +228,10 @@ def get_resume_stats():
         conn.close()
 
 def log_admin_action(admin_email, action):
-    """Log admin login/logout actions"""
+    """Log admin login/logout actions."""
+    if supabase_store.backend_name() == "supabase":
+        supabase_store.rpc("ats_log_admin_action", {"p_email": admin_email.strip().lower(), "p_action": action})
+        return
     conn = get_database_connection()
     cursor = conn.cursor()
     
@@ -290,6 +300,16 @@ def get_all_resume_data():
 
 def verify_admin(email, password):
     """Verify an admin and transparently upgrade legacy clear-text passwords."""
+    if supabase_store.backend_name() == "supabase":
+        rows = supabase_store.rows(supabase_store.table("admin").select("id,password").eq("email", email.strip().lower()).limit(1).execute())
+        if not rows:
+            return False
+        valid, legacy = _verify_password(password, rows[0].get("password"))
+        if valid and legacy:
+            supabase_store.rpc("ats_update_admin_password", {
+                "p_email": email.strip().lower(), "p_password": _hash_password(password)
+            })
+        return valid
     conn = get_database_connection()
     cursor = conn.cursor()
 
@@ -315,15 +335,42 @@ def verify_admin(email, password):
         conn.close()
 
 
+def create_first_admin(email, password):
+    """Atomically create the initial account only when no admin exists."""
+    email = email.strip().lower()
+    password_hash = _hash_password(password)
+    if supabase_store.backend_name() == "supabase":
+        result = supabase_store.rpc("ats_create_first_admin", {"p_email": email, "p_password": password_hash})
+        value = getattr(result, "data", False)
+        if isinstance(value, list):
+            value = value[0] if value else False
+        if isinstance(value, dict):
+            value = next(iter(value.values()), False)
+        return value is True or str(value).lower() == "true"
+    if admin_count() != 0:
+        return False
+    return add_admin(email, password)
+
+
 def add_admin(email, password):
-    """Add a new admin using a salted password hash."""
+    """Add an admin; in Supabase mode the first-admin bootstrap is atomic."""
+    email = email.strip().lower()
+    password_hash = _hash_password(password)
+    if supabase_store.backend_name() == "supabase":
+        result = supabase_store.rpc("ats_add_admin", {"p_email": email, "p_password": password_hash})
+        value = getattr(result, "data", False)
+        if isinstance(value, list):
+            value = value[0] if value else False
+        if isinstance(value, dict):
+            value = next(iter(value.values()), False)
+        return value is True or str(value).lower() == "true"
     conn = get_database_connection()
     cursor = conn.cursor()
 
     try:
         cursor.execute(
             'INSERT INTO admin (email, password) VALUES (?, ?)',
-            (email.strip(), _hash_password(password))
+            (email, password_hash)
         )
         conn.commit()
         return True
@@ -336,6 +383,12 @@ def add_admin(email, password):
 
 def admin_count():
     """Number of accounts allowed to sign in."""
+    if supabase_store.backend_name() == "supabase":
+        result = supabase_store.rpc("ats_admin_count", {})
+        value = getattr(result, "data", 0)
+        if isinstance(value, list):
+            value = value[0] if value else 0
+        return int(value or 0)
     conn = get_database_connection()
     try:
         return conn.execute('SELECT COUNT(*) FROM admin').fetchone()[0]
@@ -345,6 +398,8 @@ def admin_count():
 
 def list_admins():
     """Account e-mails and creation dates (never password hashes)."""
+    if supabase_store.backend_name() == "supabase":
+        return supabase_store.rows(supabase_store.table("admin").select("email,created_at").order("created_at").execute())
     conn = get_database_connection()
     try:
         return conn.execute('SELECT email, created_at FROM admin ORDER BY created_at').fetchall()
@@ -356,6 +411,11 @@ def update_admin_password(email, current_password, new_password):
     """Change a password after re-checking the current one."""
     if not verify_admin(email, current_password):
         return False
+    if supabase_store.backend_name() == "supabase":
+        supabase_store.rpc("ats_update_admin_password", {
+            "p_email": email.strip().lower(), "p_password": _hash_password(new_password)
+        })
+        return True
     conn = get_database_connection()
     try:
         conn.execute('UPDATE admin SET password = ? WHERE email = ?', (_hash_password(new_password), email.strip()))

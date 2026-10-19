@@ -12,7 +12,7 @@ Sothema HR Intelligence is a Streamlit application for authorized RH managers an
 - review advisory scores, confidence, evidence, and extraction warnings;
 - search and filter imported dossiers;
 - assign RH review statuses and validate analyses;
-- keep original files, analysis results, and audit events in SQLite;
+- keep original files, analysis results, and audit events in SQLite locally or Supabase Postgres/Storage when hosted;
 - optionally run pseudonymized external AI analysis.
 
 This is an RH tool, not an applicant-facing resume builder. It does not automatically reject, invite, rank, or hire candidates. Every score is advisory and requires human review.
@@ -28,8 +28,9 @@ app.py
           ├── utils/document_extractor.py   layout-aware PDF/DOCX extraction
           ├── sothema_quality.py            fairness, confidence, evidence
           ├── utils/resume_analyzer.py      local advisory scoring
-          └── ats_store.py                  transactional SQLite persistence
-              └── resume_data.db (local only, never committed)
+          └── ats_store.py                  SQLite locally / Supabase Postgres + Storage when hosted
+              ├── resume_data.db (local only, never committed)
+              └── private `candidate-cvs` Storage bucket (hosted originals)
 ```
 
 Important modules:
@@ -39,7 +40,8 @@ Important modules:
 - `utils/document_extractor.py` — column/table-aware extraction, DOCX XML parsing, provenance, OCR status.
 - `sothema_quality.py` — protected-attribute exclusion, confidence, document signals, pseudonymization, evidence.
 - `utils/resume_analyzer.py` — existing local ATS-style advisory analyzer.
-- `ats_store.py` — ATS schema, migrations, duplicate detection, audit log, exports, backups.
+- `ats_store.py` — backend-neutral candidate storage, duplicate detection, audit log, exports and backups (SQLite locally; Supabase hosted).
+- `config/supabase_store.py` — server-side Supabase client and private Storage operations.
 - `ats_api.py` — optional local Flask API using the same extraction and persistence pipeline.
 - `PROJECT_DESCRIPTION.txt` — full project handoff and operational documentation.
 
@@ -80,6 +82,41 @@ sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-
 Open <http://127.0.0.1:8501>.
 
 On a fresh local database, the login page lets an authorized RH manager create the first administrator account. Passwords are stored as salted PBKDF2-SHA256 hashes. Do not put credentials in source files or GitHub.
+
+## Host the proof of concept on Streamlit Community Cloud
+
+The hosted app uses Supabase for persistent ATS data because Community Cloud's local filesystem is not a durable database. The Streamlit server uses a **server-only service-role key**; it is never sent to the browser. SQLite remains the default for local development and tests when Supabase secrets are absent.
+
+### 1. Create and secure Supabase
+
+1. Create a private Supabase project in an appropriate region and save the database password securely.
+2. In Supabase **SQL Editor**, run the complete [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql) migration. It creates the ATS schema, restricts direct table/RPC access to the server service role, and creates the private `candidate-cvs` Storage bucket.
+3. Confirm Storage shows `candidate-cvs` as **private**. Do not add public read policies or expose the service-role/secret key.
+4. Copy the project URL and the service-role key from Supabase API settings. Treat the latter like a database password.
+
+### 2. Deploy the repository
+
+1. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/) and choose **Create app**.
+2. Select repository `anv63/sothemia-recrute`, branch `main`, and main file path `app.py`.
+3. In the app's **Settings → Secrets**, add (substitute the real values; do not commit them):
+
+```toml
+[supabase]
+url = "https://<project-ref>.supabase.co"
+service_role_key = "<server-only-service-role-key>"
+storage_bucket = "candidate-cvs"
+```
+
+4. Save and deploy. Root `packages.txt` requests Poppler and Tesseract system tools for PDF fallback/OCR. If Community Cloud cannot install a package, text-based PDF/DOCX extraction still works, but scanned/image-only PDFs may need manual review.
+5. Open the app and confirm **Paramètres → Données** reports the Supabase Postgres + Storage backend as healthy. Then create the initial RH administrator through the setup screen. No candidate or admin demo accounts are seeded.
+6. Test with synthetic CV files first: upload, exact duplicate, restart/persistence, original-file download, review/audit, and deletion. Confirm the original object disappears from the private bucket after deletion.
+
+### Proof-of-concept limitations
+
+- This is a PoC configuration, not a production security review. Do not upload real applicant CVs until access control, privacy notices, data-processing terms, retention/deletion, incident response, backup/restore, and RH authorization have been approved.
+- Supabase free-tier projects may pause and have limited backup/storage guarantees. Review the selected plan, export and restore process, and project region before relying on it. Streamlit Community Cloud also has deployment/resource limits.
+- The application stores ATS records, admin password hashes, audit events, and file originals in Supabase. Passwords remain salted PBKDF2-SHA256 hashes. Candidate+audit writes and initial admin+audit creation use atomic SQL RPCs. Admin login/logout are logged; failed login attempts appear in ATS audit. Object storage and Postgres cannot share a transaction, so failed ingestion attempts perform compensating object cleanup.
+- The optional local Flask API is not enabled by this deployment guide. Do not expose it publicly without authentication, rate limiting, and a separate security review.
 
 ## Run with a scratch database
 
@@ -126,7 +163,7 @@ SOTHEMA_DB_PATH=/tmp/sothema-ci.db \
 .venv-final/bin/python -m pytest -q
 ```
 
-The tests cover designed two-column PDFs, DOCX tables and headers/footers, source provenance, semantic CV detection, and invalid documents.
+The tests cover designed two-column PDFs, DOCX tables and headers/footers, source provenance, semantic CV detection, invalid documents, and mocked Supabase storage/RPC behavior.
 
 ## Data protection and fairness
 
@@ -154,4 +191,4 @@ See:
 4. Never add CVs, databases, exports, `.env` files, credentials, or screenshots containing personal data.
 5. Open a pull request with behavior changes, test results, and security/privacy impact.
 
-The React reference in `reference/react-design/` may be updated for visual handoff, but the Streamlit/Python application and SQLite ATS store remain the implementation source of truth.
+The React reference in `reference/react-design/` may be updated for visual handoff, but the Streamlit/Python application and configured ATS store remain the implementation source of truth.

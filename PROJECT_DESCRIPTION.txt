@@ -32,7 +32,7 @@ RH managers and recruiters. It provides a CVthèque where recruiters can:
 - inspect audit history;
 - export CVthèque data;
 - optionally run a pseudonymized external AI analysis when configured;
-- keep the original CV file and all analysis data in local SQLite storage.
+- store data in local SQLite for development or Supabase Postgres plus private Storage for the hosted PoC.
 
 The application does not automatically reject, invite, rank, or hire candidates.
 All scores are recommendations for reading assistance. A recruiter must inspect the
@@ -99,11 +99,14 @@ Application URL:
 
     http://127.0.0.1:8501
 
-The application uses the production SQLite database beside the code:
+Local application database path:
 
     resume_data.db
 
-For automated tests, use a separate database without touching production:
+Hosted mode selects Supabase when its URL or service-role key is configured; it does
+not create a local ATS database. A partial Supabase configuration fails closed rather
+than silently using ephemeral local storage. For automated tests, use a separate
+SQLite database without touching production:
 
     SOTHEMA_DB_PATH=/tmp/sothema-test.db \
     .venv-final/bin/python -m streamlit run app.py \
@@ -119,9 +122,9 @@ ats_store.py.
 The application has a login gate before candidate data or application pages are
 shown.
 
-The administrator account is stored in the admin table in resume_data.db. Passwords
-are stored as salted PBKDF2-SHA256 hashes. The plaintext password is not stored in
-the database.
+The administrator account is stored in the admin table in resume_data.db locally, or
+in Supabase Postgres when hosted. Passwords are stored as salted PBKDF2-SHA256 hashes.
+The plaintext password is not stored in the database.
 
 On a new empty installation, the first screen allows an authorized RH manager to
 create the first administrator account. Requirements:
@@ -134,8 +137,8 @@ After that, additional accounts can be created from Paramètres > Comptes. An RH
 manager can also change their own password. Login failures are audited and repeated
 failures are temporarily rate-limited in the Streamlit session.
 
-The application records login and logout events in both the legacy admin_logs table
-(where applicable) and the ATS audit log.
+The local helpers are documented in config/database.py; hosted admin actions use
+Supabase RPCs and audit records. Login failures are recorded in the ATS audit log.
 
 For security, credentials should be supplied directly at login or through a secure
 password manager. Do not commit passwords to this documentation file, source code,
@@ -164,9 +167,15 @@ sothema_ui.py
     upload size, and server/browser settings.
 
 ats_store.py
-    Authoritative ATS persistence layer. Owns the ATS SQLite schema, migrations,
-    transaction boundaries, candidate queries, SHA-256 duplicate detection, review
-    statuses, notes, audit log, backups, and storage statistics.
+    Authoritative ATS persistence facade. Uses transactional local SQLite for
+    development/tests or Supabase Postgres + private Storage for hosted PoC. Handles
+    candidate queries, SHA-256 duplicate detection, review status, notes, audit log,
+    logical exports, and storage statistics.
+
+config/supabase_store.py
+    Server-side Supabase client and private Storage helpers. Reads Streamlit secrets or
+    SOTHEMA_SUPABASE_* environment variables; never exposes the service-role key to a
+    browser.
 
 config/database.py
     Legacy application database helpers plus administrator account functions. It
@@ -195,8 +204,8 @@ sothema_quality.py
 
 ats_api.py
     Optional local Flask API. It now shares the same extraction, quality, scoring,
-    and SQLite pipeline as Streamlit rather than returning hard-coded confidence or
-    metadata.
+    and configured persistence pipeline as Streamlit rather than returning hard-coded
+    confidence or metadata.
 
 ui_components.py and style/style.css
     Older visual helpers retained for legacy utility pages. They are not the active
@@ -265,15 +274,17 @@ Step 9: confidence calculation
     Field confidence, readability confidence, and semantic confidence are combined.
     See the dedicated confidence section below.
 
-Step 10: transactional persistence
+Step 10: backend persistence
     The original bytes, extracted text, analysis JSON, score, confidence, and audit
-    event are written in one SQLite transaction. If persistence fails, the candidate
-    is not confirmed.
+    event are written as a Postgres candidate/audit transaction in Supabase mode, with
+    the original binary held in private Storage. Local mode writes the full record and
+    original BLOB plus audit event in one SQLite transaction. If cloud database write
+    fails, ingestion attempts compensating object cleanup.
 
 Step 11: read-after-write verification
-    The inserted row is read back from SQLite before the UI says the dossier is
-    complete. The import result then shows the persisted candidate ID and extraction
-    metadata.
+    The inserted row is read back from the configured backend before the UI says the
+    dossier is complete. The import result then shows the persisted candidate ID and
+    extraction metadata.
 
 
 7. LAYOUT-AWARE EXTRACTION
@@ -447,52 +458,27 @@ A recruiter can explicitly mark an analysis as validated. This records the revie
 and time in the candidate row and audit log.
 
 
-11. SQLITE STORAGE
-------------------
-The authoritative ATS database is:
+11. DATA STORAGE
+---------------
+Local development and tests default to resume_data.db. Candidate originals are BLOBs
+in ats_candidates.original_file. Cloud mode is selected when both Supabase URL and
+service-role key are configured; it stores ATS rows, analysis, admin hashes, and audit
+in Postgres and originals in private Storage. The service-role key is read server-side
+only. The migration is supabase/migrations/001_initial.sql. Cloud mode does not use
+or create a local candidate DB.
 
-    resume_data.db
+The ATS tables in either backend include:
 
-The ATS tables are:
+    ats_candidates: fingerprint (unique SHA-256), source filename, file metadata,
+        extracted text, structured/local/AI analysis JSON, score, confidence, review,
+        notes, and timestamps.
+    ats_audit_log: append-only actions, candidate ID, actor, details, timestamp.
+    admin: e-mail and salted PBKDF2-SHA256 password hash.
+    admin_logs: login/logout history.
 
-ats_candidates
-    Candidate dossier and original file. Important columns include:
-
-    - id;
-    - fingerprint (unique SHA-256 hash);
-    - source_filename;
-    - original_file (BLOB);
-    - file_type;
-    - file_size;
-    - full_name, email, phone, summary;
-    - raw_text;
-    - structured_json;
-    - local_analysis_json;
-    - ai_analysis_json;
-    - score;
-    - confidence;
-    - processing;
-    - review;
-    - notes;
-    - reviewed_by and reviewed_at;
-    - target_role;
-    - created_by, created_at, updated_at.
-
-ats_audit_log
-    Append-only event history. It records imports, rejected files, duplicate events,
-    review changes, validations, notes metadata, exports, logins, and other relevant
-    actions. Note contents are not stored in audit details; only note length is logged.
-
-Other legacy tables
--------------------
-resume_data.db also contains older resume-builder and legacy analysis tables because
-this application grew from an older Smart Resume AI project. They are not the source
-of truth for the active CVthèque. The active ATS records are in ats_candidates and
-ats_audit_log.
-
-The project previously contained demo/legacy data. It was backed up and purged before
-the RH CVthèque was made active. Production ATS candidate storage starts empty and
-only real uploads should create ats_candidates rows.
+Legacy resume-builder tables exist in the local SQLite schema only and are not the
+source of truth for the active RH CVthèque. Candidate storage starts empty; no demo,
+seeded, or placeholder candidates are created.
 
 
 12. SEARCH, FILTERING AND EVIDENCE
@@ -526,9 +512,9 @@ The Paramètres page provides:
 Journal d'audit
     Search and filter append-only events, then export the visible audit rows.
 
-Données locales
-    Show candidate count, audit count, database size, original file size, export CSV,
-    export Excel, and create a consistent SQLite backup.
+Données
+    Show backend health, candidate count, audit count, storage usage, CSV/Excel export,
+    and (SQLite local only) a consistent SQLite backup.
 
 Comptes
     List administrator e-mails, create RH accounts, and change the current password.
@@ -538,9 +524,74 @@ IA & éthique
     versus external analysis behavior.
 
 Exports contain personal data and must be handled securely.
+Hosted mode health is checked from Paramètres > Données; cloud mode never offers a
+SQLite backup. Use Supabase's project backup/export facilities and maintain a tested
+restore procedure instead.
 
 
-14. OPTIONAL LOCAL API
+14. HOSTED PROOF OF CONCEPT (STREAMLIT COMMUNITY CLOUD + SUPABASE)
+-----------------------------------------------------------------
+Community Cloud's local filesystem is not a durable database. For the hosted PoC,
+Supabase stores ATS candidate metadata and analysis, administrator password hashes,
+and audit records in Postgres. Original PDF/DOCX bytes are stored in the private
+candidate-cvs Storage bucket. The local SQLite path remains the default when Supabase
+configuration is absent.
+
+Prerequisites and deployment steps
+----------------------------------
+1. Create a private Supabase project in an appropriate region. Keep the database
+   password and service-role key in a secret manager.
+2. Open Supabase SQL Editor and run the complete migration:
+
+       supabase/migrations/001_initial.sql
+
+   It creates the ATS/admin/audit tables, indexes, RPC procedures, RLS, and the private
+   candidate-cvs bucket. Verify the bucket remains private. Direct browser roles have
+   no table policies or RPC grants; only the server-side service-role client is used.
+3. In Streamlit Community Cloud, create an app from GitHub repository
+   anv63/sothemia-recrute, branch main, entrypoint app.py.
+4. Open app Settings > Secrets and provide this TOML (replace placeholders; never
+   commit these values):
+
+       [supabase]
+       url = "https://<project-ref>.supabase.co"
+       service_role_key = "<server-only-service-role-key>"
+       storage_bucket = "candidate-cvs"
+
+   For local server testing, the equivalent environment variables are
+   SOTHEMA_SUPABASE_URL, SOTHEMA_SUPABASE_SERVICE_ROLE_KEY, and optionally
+   SOTHEMA_SUPABASE_STORAGE_BUCKET.
+5. Deploy and visit Paramètres > Données. Confirm Supabase Postgres and Storage health
+   before attempting an upload. Create the first RH admin from the first-run login
+   page. No candidates/admins are seeded.
+6. Verify with synthetic CVs: upload; retry exact duplicate; restart and confirm
+   persistence; download the private original; update review and inspect audit; delete
+   the record and confirm its object was removed from Storage.
+
+The root packages.txt requests Poppler and Tesseract for fallback PDF extraction and
+scanned-page OCR. Community Cloud's build environment may constrain available system
+packages. Text-based PDFs and DOCX remain usable without OCR; scanned/image-only
+pages need OCR or manual review.
+
+PoC safeguards and limitations
+------------------------------
+Do not upload real applicant data until security/access controls, RH authorization,
+privacy notices, data-processing terms, region, retention/deletion, incident response,
+and backup/restore responsibilities have been approved. Supabase free-tier projects
+may pause and have limited storage/backup guarantees; review the active plan and test
+an export/restore process. Streamlit Community Cloud also has platform/resource limits.
+
+Database row plus audit writes are atomic via Postgres RPC. Postgres and object storage
+cannot participate in one shared transaction: ingestion uploads the file first, then
+writes the candidate/audit transaction, and removes the object on database failure.
+Deletion commits candidate/audit changes before removing Storage objects; if object
+cleanup fails the UI reports that the orphaned object needs manual cleanup in Supabase.
+The service-role key bypasses RLS and must remain a server-only secret. The optional
+Flask API is not part of this hosted setup and must not be exposed publicly without a
+separate authentication/security design.
+
+
+15. OPTIONAL LOCAL API
 ----------------------
 ats_api.py exposes an optional Flask API when started directly:
 
@@ -600,9 +651,9 @@ Install OCR on Debian/Ubuntu:
     sudo apt-get update
     sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra
 
-The application reports capabilities in Paramètres > Données locales and through
-/api/health. If Tesseract is not installed, text-based PDFs and designed text PDFs
-still work; image-only pages are marked for manual review.
+The application reports capabilities in Paramètres > Données and through /api/health.
+If Tesseract is not installed, text-based PDFs and designed text PDFs still work;
+image-only pages are marked for manual review.
 
 
 16. TESTING AND VERIFICATION
@@ -610,7 +661,7 @@ still work; image-only pages are marked for manual review.
 Compile the active Python modules:
 
     .venv-final/bin/python -m compileall -q \
-        app.py sothema_views.py sothema_quality.py ats_api.py utils
+        app.py sothema_views.py sothema_quality.py ats_api.py ats_store.py config utils tests
 
 Run extraction tests:
 
@@ -624,7 +675,8 @@ The current regression suite covers:
 - DOCX table extraction;
 - DOCX header/footer extraction;
 - semantic analysis of structured documents;
-- invalid/incomplete extraction behavior.
+- invalid/incomplete extraction behavior;
+- Supabase backend selection, private Storage access, ingestion rollback cleanup, deletion errors, and admin RPC return parsing.
 
 Run a Streamlit headless smoke test with a scratch database:
 
@@ -645,7 +697,7 @@ Recommended manual acceptance test:
 6. Inspect extraction methods, page count, warnings and confidence.
 7. Open the dossier and compare evidence quotes with the source text.
 8. Mark the analysis as validated.
-9. Restart Streamlit and confirm the dossier remains in SQLite.
+9. Restart the app and confirm the dossier remains in the configured backend (SQLite locally or Supabase when hosted).
 10. Upload the same file again and confirm exact duplicate rejection.
 11. Search with a protected term and confirm it is ignored.
 12. Inspect the audit log for import, review, validation and duplicate events.
@@ -662,9 +714,9 @@ Login credentials no longer work
     plaintext passwords into SQLite.
 
 No candidates appear
-    Confirm that the app is using the intended database path. The production path is
-    Smart-AI-Resume-Analyzer-main/resume_data.db. A test process may be using
-    SOTHEMA_DB_PATH instead.
+    Confirm which backend is configured. Supabase mode requires the correct URL,
+    service-role key, successful migration, and private bucket. Local tests may use
+    SOTHEMA_DB_PATH instead of resume_data.db.
 
 Designed PDF is accepted but confidence is low
     Inspect extraction warnings and the source text. Low confidence can mean missing
@@ -683,7 +735,7 @@ Candidate upload creates no record
 Streamlit import error after code changes
     Compile modules and inspect the server log:
 
-        .venv-final/bin/python -m compileall -q app.py sothema_views.py sothema_quality.py utils
+        .venv-final/bin/python -m compileall -q app.py sothema_views.py sothema_quality.py ats_store.py config utils
         tail -100 /tmp/sothema-streamlit.log
 
 
@@ -717,7 +769,8 @@ Before production deployment:
 - do not expose Streamlit beyond a trusted network without an authentication and
   reverse-proxy plan;
 - use HTTPS for any remote deployment;
-- keep API keys out of source control and SQLite;
+- configure private Supabase Storage and verify cleanup/restore before cloud use;
+- keep API keys out of source control and use a secret manager;
 - rotate the initial administrator password;
 - do not share exports casually because they contain personal data;
 - install only trusted Python and system packages;
@@ -754,11 +807,12 @@ For active RH behavior, use this chain:
         -> sothema_quality.py
         -> utils/resume_analyzer.py
         -> ats_store.py
-          -> resume_data.db
+          -> SQLite resume_data.db (local) OR Supabase Postgres + private Storage (hosted)
 
-Original CV bytes are stored in ats_candidates.original_file.
-The active local analysis is stored in ats_candidates.local_analysis_json.
-Extraction metadata and provenance are stored inside the sothema object in that JSON.
-Audit events are stored in ats_audit_log.
+Original CV bytes are stored in ats_candidates.original_file in SQLite, or under the
+opaque storage_key in the private candidate-cvs bucket in Supabase. The active local
+analysis is stored in ats_candidates.local_analysis_json. Extraction metadata and
+provenance are stored inside the sothema object in that JSON. Audit events are stored
+in ats_audit_log.
 
 This chain is the authoritative Sothema HR Intelligence application.

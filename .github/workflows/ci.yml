@@ -20,7 +20,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Compile Python modules
-        run: python -m compileall -q app.py sothema_views.py sothema_quality.py ats_api.py utils
+        run: python -m compileall -q app.py sothema_views.py sothema_quality.py ats_api.py ats_store.py config utils
       - name: Run tests with isolated database
         env:
           SOTHEMA_DB_PATH: ${{ runner.temp }}/sothema-ci.db

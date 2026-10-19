@@ -1,3 +1,8 @@
 chromium
 chromium-driver
 xvfb
+
+poppler-utils
+tesseract-ocr
+tesseract-ocr-eng
+tesseract-ocr-fra

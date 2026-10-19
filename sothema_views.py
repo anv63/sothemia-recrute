@@ -1,12 +1,11 @@
 """Sothema HR Intelligence pages (Streamlit), rebuilt from the React reference design.
 
-Every candidate shown here is read back from SQLite (ats_store); nothing is fabricated
-on the client. Scores come from the existing ResumeAnalyzer and stay advisory.
+Every candidate shown here is read back from the configured ATS store; nothing is
+fabricated on the client. Scores come from the existing ResumeAnalyzer and stay advisory.
 """
 import io
 import json
 import re
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,7 +15,7 @@ import streamlit as st
 import ats_store as store
 import sothema_quality as quality
 from utils import document_extractor
-from config.database import add_admin, admin_count, list_admins, log_admin_action, update_admin_password, verify_admin
+from config.database import add_admin, admin_count, create_first_admin, list_admins, log_admin_action, update_admin_password, verify_admin
 from sothema_ui import (
     AUDIT_LABELS, confidence_badge, empty_state, esc, field_dot, human_size, page_header, review_badge,
     score_badge, sidebar_status, user_chip,
@@ -245,10 +244,7 @@ def _first_run_setup():
             st.error("Le mot de passe doit contenir au moins 10 caractères.")
         elif password != confirm:
             st.error("Les deux mots de passe ne correspondent pas.")
-        elif admin_count() != 0:
-            st.error("Un compte a déjà été créé entre-temps. Connectez-vous avec celui-ci.")
-        elif add_admin(email, password):
-            store.log_event("admin_created", details={"email": email, "first_run": True}, actor=email)
+        elif create_first_admin(email, password):
             _sign_in(email)
         else:
             st.error("Création du compte impossible.")
@@ -476,7 +472,7 @@ def page_cvtheque(app):
     for key, value in _FILTER_DEFAULTS.items():
         st.session_state.setdefault(key, value)
     everything = fetch_candidates()
-    actions = header_with_actions("CVthèque", f"{plural(len(everything), 'dossier')} · base locale SQLite")
+    actions = header_with_actions("CVthèque", f"{plural(len(everything), 'dossier')} · {store.backend_name()}")
     with actions:
         st.download_button("Exporter CSV", csv_bytes(export_frame(everything)), "cvtheque_sothema.csv", "text/csv",
                            icon=":material/download:", disabled=not everything, key="cv_export_all",
@@ -488,7 +484,7 @@ def page_cvtheque(app):
         with st.container(border=True, key="card-cv-empty"):
             empty_state("group", "Aucun CV dans la CVthèque",
                         "Les CV importés apparaissent ici uniquement après extraction, analyse et enregistrement "
-                        "réussis dans SQLite.")
+                        "réussis dans le stockage configuré.")
             with st.container(horizontal_alignment="center"):
                 if st.button("Importer des CV", icon=":material/upload_file:", type="primary", key="cv_empty_import"):
                     goto("import")
@@ -589,15 +585,23 @@ def _bulk_bar(selected):
 
 @st.dialog("Supprimer des dossiers")
 def confirm_delete(ids):
+    data_location = "Supabase Postgres et son Storage privé" if store.backend_name() == "supabase" else "base locale"
     st.write(f"{plural(len(ids), 'dossier')} ({', '.join(f'#{i}' for i in ids)}) : fiche, CV original et analyses "
-             "seront supprimés de la base locale. L'opération est tracée dans le journal d'audit et ne peut pas "
+             f"seront supprimés de {data_location}. L'opération est tracée dans le journal d'audit et ne peut pas "
              "être annulée.")
     typed = st.text_input("Tapez SUPPRIMER pour confirmer", key="so_delete_confirm") if len(ids) > 1 else "SUPPRIMER"
     with st.container(horizontal=True, horizontal_alignment="right"):
         if st.button("Annuler", key="so_delete_cancel"):
             st.rerun()
         if st.button("Supprimer définitivement", type="primary", disabled=typed != "SUPPRIMER", key="so_delete_go"):
-            store.delete_candidates(ids, actor())
+            try:
+                store.delete_candidates(ids, actor())
+            except Exception as exc:
+                message = f"Suppression effectuée avec un problème de stockage : {exc}"
+                if "records were deleted" in str(exc):
+                    message += " Réessayez le nettoyage des CV orphelins dans Supabase Storage."
+                st.error(message)
+                return
             st.session_state["so_flash"] = f"{plural(len(ids), 'dossier')} supprimé(s)."
             goto("cvtheque")
 
@@ -607,8 +611,9 @@ def confirm_delete(ids):
 def page_import(app):
     st.session_state.setdefault("import_results", [])
     st.session_state.setdefault("uploader_round", 0)
-    page_header("Importer des CV", "Traitement synchrone et local. Un dossier n'est créé qu'après extraction, "
-                "analyse et écriture SQLite réussies.", crumbs=["CVthèque", "Import"])
+    backend_label = "Supabase + Storage" if store.backend_name() == "supabase" else "SQLite"
+    page_header("Importer des CV", f"Traitement synchrone. Un dossier n'est créé qu'après extraction, "
+                f"analyse et écriture dans {backend_label} réussies.", crumbs=["CVthèque", "Import"])
     main, side = st.columns([8, 4])
     with main:
         with st.container(border=True, key="card-import-upload"):
@@ -661,7 +666,10 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
     sha = store.fingerprint(data) if data else ""
 
     def stop(kind, reason):
-        store.log_event("ingestion_failed", details={"filename": name, "sha256": sha, "reason": reason}, actor=actor())
+        try:
+            store.log_event("ingestion_failed", details={"filename": name, "sha256": sha, "reason": reason}, actor=actor())
+        except Exception:
+            pass
         say(f":red[{md(reason)}]")
         return {"outcome": kind, "filename": name, "message": reason}
 
@@ -703,7 +711,8 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
         return stop("rejected", f"Le document ne ressemble pas à un CV (type détecté : {analysis.get('document_type')}).")
     meta = analysis["sothema"]
 
-    say("Enregistrement SQLite : fichier original, texte, analyse et entrée d'audit (transaction unique)…")
+    backend_label = "Supabase Storage et Postgres" if store.backend_name() == "supabase" else "SQLite"
+    say(f"Enregistrement {backend_label} : fichier original, texte, analyse et entrée d'audit…")
     try:
         candidate_id = store.save_candidate(name, data, raw, analysis, full_name=meta["name"],
                                             score=int(analysis.get("ats_score") or 0), confidence=meta["confidence"],
@@ -711,14 +720,14 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
     except store.DuplicateCandidateError as duplicate:
         return {"outcome": "duplicate", "filename": name, "candidate_id": duplicate.candidate_id,
                 "message": f"Fichier identique au dossier #{duplicate.candidate_id}."}
-    except sqlite3.Error as exc:
-        return stop("error", f"Écriture SQLite impossible, rien n'a été enregistré : {exc}")
+    except Exception as exc:
+        return stop("error", f"Écriture {backend_label} impossible, vérifiez la connexion et la configuration : {exc}")
 
     persisted = store.get_candidate(candidate_id)
     if not persisted:
         return stop("error", "Le dossier n'a pas pu être relu après écriture.")
     probable = store.find_by_email(persisted["email"], exclude_id=candidate_id)
-    say(f":green[Dossier #{candidate_id} enregistré et relu depuis SQLite.]")
+    say(f":green[Dossier #{candidate_id} enregistré et relu depuis {backend_label}.]")
     result = {
         "outcome": "saved", "filename": name, "candidate_id": candidate_id, "probable": probable,
         "message": "Prêt pour revue", "extraction": extraction.as_dict(),
@@ -800,8 +809,9 @@ def page_dossier(app):
     with actions:
         mime = "application/pdf" if row["file_type"] == "pdf" else \
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        st.download_button("CV original", bytes(row["original_file"] or b""), row["source_filename"], mime,
-                           icon=":material/download:", key="dossier_download", disabled=not row["original_file"],
+        original = store.get_original_file(dict(row))
+        st.download_button("CV original", original or b"", row["source_filename"], mime,
+                           icon=":material/download:", key="dossier_download", disabled=not original,
                            on_click=lambda: store.log_event("original_downloaded", cid, None, actor()))
         if st.button("Retour", icon=":material/arrow_back:", key="dossier_back"):
             goto("cvtheque")
@@ -1091,17 +1101,25 @@ def _settings_audit():
 
 def _settings_data():
     stats = store.storage_stats()
+    health = store.backend_health()
     rows = fetch_candidates()
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Dossiers", len(rows), border=True)
     c2.metric("Entrées d'audit", store.audit_count(), border=True)
-    c3.metric("Taille de la base", human_size(stats["db_bytes"]), border=True)
+    c3.metric("Base de données", "Supabase" if stats.get("backend") == "supabase" else human_size(stats["db_bytes"]), border=True)
     c4.metric("CV originaux stockés", human_size(stats["original_bytes"]), border=True)
     with st.container(border=True, key="card-settings-data"):
-        st.subheader("Base de données")
-        st.html(f'<div class="so-mono">sqlite:///{esc(stats["db_path"])}</div>')
-        st.caption("Base unique de l'application : CV originaux, texte extrait, analyses et journal d'audit. "
-                   "Aucune donnée de démonstration n'y est créée.")
+        if not health.get("ok"):
+            st.error(f"Backend inaccessible : {health.get('error', 'erreur inconnue')}", title="État du stockage")
+        else:
+            st.success(f"Backend opérationnel : {health.get('backend', 'SQLite local')}", icon=":material/cloud_done:")
+        if stats.get("backend") == "supabase":
+            st.html(f'<div class="so-mono">Supabase Postgres · private Storage bucket: {esc(stats.get("bucket", "candidate-cvs"))}</div>')
+            st.caption("Dossiers, comptes RH et audit sont stockés dans Supabase Postgres ; les CV originaux sont dans le bucket privé. "
+                       "Aucune donnée de démonstration n'est créée.")
+        else:
+            st.html(f'<div class="so-mono">sqlite:///{esc(stats["db_path"])}</div>')
+            st.caption("Base unique locale : CV originaux, texte extrait, analyses et audit. Aucune donnée de démonstration n'est créée.")
         with st.container(horizontal=True):
             st.download_button("Exporter les dossiers (CSV)", csv_bytes(export_frame(rows)), "cvtheque_sothema.csv",
                                "text/csv", icon=":material/download:", disabled=not rows, key="data_csv",
@@ -1111,13 +1129,17 @@ def _settings_data():
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                icon=":material/table_view:", disabled=not rows, key="data_xlsx",
                                on_click=_log_export, args=("export_excel", len(rows)))
-            if st.button("Préparer une sauvegarde SQLite", icon=":material/backup:", key="data_backup_prepare"):
-                st.session_state["so_backup"] = store.backup_bytes()
-        if st.session_state.get("so_backup"):
+            if stats.get("backend") != "supabase":
+                if st.button("Préparer une sauvegarde SQLite", icon=":material/backup:", key="data_backup_prepare"):
+                    st.session_state["so_backup"] = store.backup_bytes()
+        if stats.get("backend") != "supabase" and st.session_state.get("so_backup"):
             st.download_button("Télécharger la sauvegarde", st.session_state["so_backup"],
                                f"sothema_backup_{datetime.now():%Y%m%d_%H%M}.db", "application/octet-stream",
                                icon=":material/download:", type="primary", key="data_backup_dl",
                                on_click=_backup_downloaded)
+        elif stats.get("backend") == "supabase":
+            st.info("Les sauvegardes hébergées sont gérées depuis Supabase. Vérifiez le plan de sauvegarde du projet et exportez régulièrement les données de test.",
+                    title="Sauvegarde Supabase", icon=":material/cloud_done:")
         with st.container(border=True, key="card-settings-engine"):
             st.subheader("État des moteurs d'extraction")
             capabilities = document_extractor.runtime_capabilities()
@@ -1148,7 +1170,9 @@ def _settings_accounts():
     with left, st.container(border=True, key="card-settings-accounts"):
         st.subheader("Comptes autorisés")
         accounts = list_admins()
-        st.dataframe(pd.DataFrame([{"E-mail": a[0], "Créé le": a[1]} for a in accounts]), hide_index=True,
+        st.dataframe(pd.DataFrame([{"E-mail": a["email"] if isinstance(a, dict) else a[0],
+                                    "Créé le": a["created_at"] if isinstance(a, dict) else a[1]}
+                                   for a in accounts]), hide_index=True,
                      alt="Comptes autorisés")
         st.caption("Les mots de passe sont stockés sous forme de hachage PBKDF2-SHA256 salé ; ils ne sont jamais "
                    "affichés.")
@@ -1196,7 +1220,7 @@ def _settings_ethics(app):
          "dans le CV ; la pondération du score est publique."),
         (":material/balance:", "Équité", "Âge, genre, nationalité, situation familiale et photo sont retirés du texte "
          "évalué et ignorés dans la recherche."),
-        (":material/lock:", "Local d'abord", "SQLite et fichiers locaux. Les fournisseurs IA sont optionnels, reçoivent "
+        (":material/lock:", "Protection des données", "SQLite local en développement, Supabase Postgres et Storage privés en hébergement. Les fournisseurs IA sont optionnels, reçoivent "
          "un texte pseudonymisé et leurs clés ne sont jamais affichées."),
     ]
     cols = st.columns(4)

@@ -38,3 +38,4 @@ flask
 flask-cors
 # Layout-aware CV extraction (Poppler and Tesseract are system packages)
 lxml
+supabase>=2.15,<3
