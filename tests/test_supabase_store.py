@@ -11,8 +11,10 @@ class FakeQuery:
     def __init__(self, data=None):
         self.data = data
         self.filters = []
+        self.selected = None
 
-    def select(self, *_args, **_kwargs):
+    def select(self, *args, **kwargs):
+        self.selected = (args, kwargs)
         return self
 
     def eq(self, key, value):
@@ -23,7 +25,7 @@ class FakeQuery:
         return self
 
     def execute(self):
-        return SimpleNamespace(data=self.data)
+        return SimpleNamespace(data=self.data, count=len(self.data or []))
 
 
 def test_failed_supabase_health_is_reported(monkeypatch):
@@ -107,6 +109,14 @@ def test_delete_reports_storage_cleanup_failure_after_db_delete(monkeypatch):
     monkeypatch.setattr(supabase_store, "remove_original", lambda _key: (_ for _ in ()).throw(RuntimeError("storage")))
     with pytest.raises(RuntimeError, match="records were deleted"):
         ats_store.delete_candidates([7], "rh@example.com")
+
+
+def test_supabase_admin_count_uses_exact_table_count(monkeypatch):
+    query = FakeQuery([{"id": 1}])
+    monkeypatch.setattr(supabase_store, "backend_name", lambda: "supabase")
+    monkeypatch.setattr(supabase_store, "table", lambda _name: query)
+    assert database.admin_count() == 1
+    assert query.selected == (("id",), {"count": "exact"})
 
 
 def test_first_admin_rpc_parses_boolean_result(monkeypatch):
