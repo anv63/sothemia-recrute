@@ -203,9 +203,9 @@ sothema_quality.py
     pseudonymizes text before external AI use.
 
 ats_api.py
-    Optional local Flask API. It now shares the same extraction, quality, scoring,
-    and configured persistence pipeline as Streamlit rather than returning hard-coded
-    confidence or metadata.
+    Optional Flask API for external integration. Every route requires a server-side
+    bearer token from SOTHEMA_INGEST_API_TOKEN. It shares the configured ATS backend,
+    validates PDF/DOCX, extracts/analyzes uploads, and returns duplicate/error statuses.
 
 ui_components.py and style/style.css
     Older visual helpers retained for legacy utility pages. They are not the active
@@ -587,43 +587,74 @@ writes the candidate/audit transaction, and removes the object on database failu
 Deletion commits candidate/audit changes before removing Storage objects; if object
 cleanup fails the UI reports that the orphaned object needs manual cleanup in Supabase.
 The service-role key bypasses RLS and must remain a server-only secret. The optional
-Flask API is not part of this hosted setup and must not be exposed publicly without a
-separate authentication/security design.
+Flask API requires its own bearer token and separate deployment controls, described
+below; never put its token or the Supabase key in an n8n workflow export.
 
 
-15. OPTIONAL LOCAL API
-----------------------
-ats_api.py exposes an optional Flask API when started directly:
+The API was previously intended for local testing only. It now requires a bearer token
+on every API route, including health, upload, candidate reads, and AI-analysis. If the
+server token is unset, requests fail closed with HTTP 503; absent or invalid credentials
+receive HTTP 401. CORS is not enabled; n8n makes server-to-server requests.
 
+Local development:
+
+    export SOTHEMA_INGEST_API_TOKEN="<local-test-token>"
     .venv-final/bin/python ats_api.py
 
-Default address:
+The development server binds to 0.0.0.0 and PORT (default 5000). For a hosted service,
+run a production WSGI server instead:
 
-    http://127.0.0.1:5000
+    gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 180 ats_api:app
 
-Endpoints:
+Configure these independently as private environment variables on the API host:
 
-GET /api/health
+    SOTHEMA_INGEST_API_TOKEN=<long-random-api-token>
+    SOTHEMA_SUPABASE_URL=https://<project-ref>.supabase.co
+    SOTHEMA_SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-key>
+    SOTHEMA_SUPABASE_STORAGE_BUCKET=candidate-cvs
+
+Use the API token separately in an n8n Header Auth credential with
+Authorization: Bearer <token>. Never put either API token or Supabase service-role key
+in source control or exported workflow JSON. The Supabase key must not be placed in n8n.
+Expose the API only over HTTPS. The API's list/get routes return sensitive candidate
+information and require the same bearer authentication as uploads.
+
+n8n upload request:
+
+    POST https://<api-host>/api/candidates/upload
+    Content-Type: multipart/form-data
+    field: file
+    Authorization: Bearer <API-token>
+
+The n8n workflow currently contains http://127.0.0.1:5000/api/candidates/upload.
+That address is only suitable when n8n and API share the same host/network. For hosted
+n8n, change it to the API host's HTTPS URL. This guide does not deploy the API or edit
+the workflow itself.
+
+GET /api/health (bearer required)
     Returns service health and extraction capability status.
 
-GET /api/candidates?q=...
-    Returns stored candidate records.
+GET /api/candidates?q=... (bearer required)
+    Returns matching stored candidate records.
 
-GET /api/candidates/<id>
+GET /api/candidates/<id> (bearer required)
     Returns one stored candidate.
 
-POST /api/candidates/upload
-    Accepts a PDF or DOCX multipart file and uses the same layout-aware extraction,
-    fairness layer, local analyzer, confidence metadata, and transactional store.
+POST /api/candidates/upload (bearer required)
+    Accepts a PDF or DOCX multipart file and uses the shared layout-aware extraction,
+    fairness layer, local analyzer, confidence metadata, and configured persistence.
+    Returns 201 when saved, 409 for an exact duplicate, and 422 when analysis rejects
+    the file.
 
-POST /api/candidates/<id>/ai-analysis
-    Stores an externally produced AI result for an existing candidate. Provider
-    access control and key handling should be enforced by the deployment boundary.
+POST /api/candidates/<id>/ai-analysis (bearer required)
+    Stores an externally produced AI result for an existing candidate.
 
-The API is optional; Streamlit remains the authoritative application UI.
+The API is optional; Streamlit remains the authoritative application UI. A bearer
+secret is only one deployment control: host behind HTTPS, restrict who can access API
+credentials, monitor requests, and approve data-retention policies.
 
 
-15. DEPENDENCIES AND SYSTEM CAPABILITIES
+16. DEPENDENCIES AND SYSTEM CAPABILITIES
 ----------------------------------------
 Python dependencies include:
 
@@ -637,7 +668,7 @@ Python dependencies include:
 - pdf2image;
 - pytesseract;
 - openpyxl;
-- Flask and Flask-CORS;
+- Flask and Gunicorn;
 - optional AI provider SDKs.
 
 System tools:
@@ -663,10 +694,13 @@ Compile the active Python modules:
     .venv-final/bin/python -m compileall -q \
         app.py sothema_views.py sothema_quality.py ats_api.py ats_store.py config utils tests
 
-Run extraction tests:
+Run API security tests with a scratch database:
 
-    SOTHEMA_DB_PATH=/tmp/sothema-extractor-test.db \
-    .venv-final/bin/python -m pytest -q tests/test_document_extractor.py
+    SOTHEMA_DB_PATH=/tmp/sothema-api-test.db \
+    .venv-final/bin/python -m pytest -q tests/test_ats_api.py
+
+The API tests cover fail-closed setup, missing/incorrect bearer tokens on every route,
+authorized access, and retained upload rejection/duplicate response codes.
 
 The current regression suite covers:
 

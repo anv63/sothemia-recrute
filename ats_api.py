@@ -1,22 +1,35 @@
 """Small local API sharing the Streamlit ATS extraction and SQLite store."""
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from pathlib import Path
 
 from flask import Flask, jsonify, request
-from flask_cors import CORS
 
-from ats_store import DuplicateCandidateError, get_candidate, init_ats_db, list_candidates, save_ai_result, save_candidate
+from ats_store import DuplicateCandidateError, backend_name, get_candidate, init_ats_db, list_candidates, save_ai_result, save_candidate
 from utils import document_extractor
 from utils.resume_analyzer import ResumeAnalyzer
 import sothema_quality as quality
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
 analyzer = ResumeAnalyzer()
 init_ats_db()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+@app.before_request
+def require_api_token():
+    configured_token = os.environ.get("SOTHEMA_INGEST_API_TOKEN", "")
+    if not configured_token:
+        return jsonify({"error": "API authentication is not configured"}), 503
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, supplied_token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not supplied_token or not hmac.compare_digest(
+        supplied_token, configured_token
+    ):
+        return jsonify({"error": "Bearer token required"}), 401
 
 
 def json_value(value, fallback=None):
@@ -56,7 +69,7 @@ def candidate_json(row):
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "service": "sothema-ats", "storage": "sqlite",
+    return jsonify({"ok": True, "service": "sothema-ats", "storage": backend_name(),
                     "capabilities": document_extractor.runtime_capabilities()})
 
 
@@ -120,4 +133,4 @@ def ai_analysis(cid):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False)

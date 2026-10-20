@@ -42,7 +42,7 @@ Important modules:
 - `utils/resume_analyzer.py` — existing local ATS-style advisory analyzer.
 - `ats_store.py` — backend-neutral candidate storage, duplicate detection, audit log, exports and backups (SQLite locally; Supabase hosted).
 - `config/supabase_store.py` — server-side Supabase client and private Storage operations.
-- `ats_api.py` — optional local Flask API using the same extraction and persistence pipeline.
+- `ats_api.py` — optional Flask API for authenticated local/hosted integrations; every route requires the separate `SOTHEMA_INGEST_API_TOKEN` bearer token.
 - `PROJECT_DESCRIPTION.txt` — full project handoff and operational documentation.
 
 ## Local setup
@@ -116,7 +116,7 @@ storage_bucket = "candidate-cvs"
 - This is a PoC configuration, not a production security review. Do not upload real applicant CVs until access control, privacy notices, data-processing terms, retention/deletion, incident response, backup/restore, and RH authorization have been approved.
 - Supabase free-tier projects may pause and have limited backup/storage guarantees. Review the selected plan, export and restore process, and project region before relying on it. Streamlit Community Cloud also has deployment/resource limits.
 - The application stores ATS records, admin password hashes, audit events, and file originals in Supabase. Passwords remain salted PBKDF2-SHA256 hashes. Candidate+audit writes and initial admin+audit creation use atomic SQL RPCs. Admin login/logout are logged; failed login attempts appear in ATS audit. Object storage and Postgres cannot share a transaction, so failed ingestion attempts perform compensating object cleanup.
-- The optional local Flask API is not enabled by this deployment guide. Do not expose it publicly without authentication, rate limiting, and a separate security review.
+- The API stores no token in the workflow: its bearer token is configured separately in Render and an n8n credential. Keep the Supabase service-role key only on the API/Streamlit servers, never in n8n.
 
 ## Run with a scratch database
 
@@ -131,39 +131,44 @@ SOTHEMA_DB_PATH=/tmp/sothema-test.db \
 
 The production `resume_data.db`, legacy databases, backups, CV corpus, exports, and uploaded files are intentionally excluded from Git.
 
-## Optional local API
+## Optional authenticated API
 
-Start the shared extraction/persistence API in another terminal:
+The Flask API is used by server-to-server integrations such as n8n. All API endpoints require a bearer token, including health and candidate-read endpoints. Set a long random value as `SOTHEMA_INGEST_API_TOKEN` in the API host's private environment settings; configure the same value in an n8n Header Auth credential. Do not store it in the workflow export or source control. This token is separate from Supabase credentials.
+
+Local development (choose your own temporary token; never paste a production token into a command recorded in shell history):
 
 ```bash
+export SOTHEMA_INGEST_API_TOKEN="<local-test-token>"
 .venv-final/bin/python ats_api.py
 ```
 
-Health check:
+Authenticated health check:
 
 ```bash
-curl http://127.0.0.1:5000/api/health
+curl -H "Authorization: Bearer $SOTHEMA_INGEST_API_TOKEN" http://127.0.0.1:5000/api/health
 ```
 
-Upload endpoint:
+For a hosted WSGI server, install requirements and start Gunicorn with:
 
-```text
-POST /api/candidates/upload
+```bash
+gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 180 ats_api:app
 ```
 
-The API is intended for local integration testing. Before hosting it, add service authentication, HTTPS, rate limiting, malware scanning, and queue-based processing.
+Set `SOTHEMA_INGEST_API_TOKEN`, `SOTHEMA_SUPABASE_URL`, `SOTHEMA_SUPABASE_SERVICE_ROLE_KEY`, and `SOTHEMA_SUPABASE_STORAGE_BUCKET` as separate private environment variables on the API host. Do not expose the service-role key to n8n. The API should be deployed only behind HTTPS, with host access controls, monitoring, and an approved retention policy for workflow execution data.
+
+When n8n sends an upload, use `POST https://<api-host>/api/candidates/upload`, multipart field `file`, and an n8n credential that sends `Authorization: Bearer <token>`. `127.0.0.1` is only valid when the API and n8n can reach each other on the same host/network; it is not the Streamlit Cloud URL.
 
 ## Test and compile
 
 ```bash
 .venv-final/bin/python -m compileall -q \
-  app.py sothema_views.py sothema_quality.py ats_api.py utils
+  app.py sothema_views.py sothema_quality.py ats_api.py ats_store.py config utils tests
 
 SOTHEMA_DB_PATH=/tmp/sothema-ci.db \
 .venv-final/bin/python -m pytest -q
 ```
 
-The tests cover designed two-column PDFs, DOCX tables and headers/footers, source provenance, semantic CV detection, invalid documents, and mocked Supabase storage/RPC behavior.
+Tests cover designed CV extraction, Supabase adapter behavior, and API authentication/response contracts.
 
 ## Data protection and fairness
 

@@ -44,7 +44,8 @@ The application currently provides:
 - administrator login with salted PBKDF2-SHA256 password hashes;
 - PDF/DOCX validation and upload-size limits;
 - SHA-256 exact duplicate detection;
-- transactional SQLite ingestion;
+- transactional ATS ingestion (SQLite locally or Postgres RPC + compensating Storage cleanup when hosted);
+- token-authenticated ATS API routes (configured server-side with `SOTHEMA_INGEST_API_TOKEN`);
 - append-only audit events;
 - protected-attribute exclusion from scoring, ranking, and search;
 - pseudonymization before optional external AI analysis;
