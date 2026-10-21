@@ -34,7 +34,86 @@ _DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]<>#|$~:])")
 
 
-# --------------------------------------------------------------------------- helpers
+_HUMAN_SECTORS = {
+    "qualite": "Qualité / assurance qualité",
+    "production": "Production / opérations",
+    "laboratoire": "Laboratoire / R&D",
+    "reglementaire": "Affaires réglementaires",
+    "supply": "Supply chain / achats",
+    "commercial": "Commercial / vente",
+    "marketing": "Marketing / communication",
+    "finance": "Finance / comptabilité",
+    "rh": "Ressources humaines",
+    "it": "Informatique / data",
+    "juridique": "Juridique",
+}
+_HUMAN_SECTOR_TERMS = {
+    "qualite": ("qualité", "quality", "assurance qualité", "quality assurance", "gmp", "capa", "qms"),
+    "production": ("production", "manufacturing", "opérations", "operations", "process engineer"),
+    "laboratoire": ("laboratoire", "laboratory", "lab", "r&d", "research", "recherche", "chimie"),
+    "reglementaire": ("réglementaire", "reglementaire", "regulatory", "compliance", "pharmacovigilance"),
+    "supply": ("supply chain", "logistique", "logistics", "procurement", "achats", "stock", "approvisionnement"),
+    "commercial": ("commercial", "sales", "vente", "business development", "account manager"),
+    "marketing": ("marketing", "communication", "brand", "digital marketing"),
+    "finance": ("finance", "financier", "comptabilité", "comptabilite", "accounting", "audit"),
+    "rh": ("ressources humaines", "ressource humaine", "human resources", "recrutement", "talent", "hr", "rh"),
+    "it": ("informatique", "software", "développeur", "developer", "data", "it ", "python", "sql", "cyber"),
+    "juridique": ("juridique", "legal", "lawyer", "avocat", "contract"),
+}
+_HUMAN_FUNCTION_TERMS = {
+    "Assurance qualité": ("responsable qualité", "quality assurance", "assurance qualité", "quality manager", "qa manager", "qa engineer", "qa specialist", "qa officer"),
+    "Production": ("responsable production", "production manager", "production supervisor", "production engineer", "chef de production", "opérateur de production"),
+    "Affaires réglementaires": ("affaires réglementaires", "regulatory affairs", "regulatory specialist", "regulatory manager", "pharmacovigilance"),
+    "Laboratoire / R&D": ("technicien de laboratoire", "laboratory technician", "lab technician", "chercheur", "researcher", "r&d scientist", "laboratory analyst"),
+    "Supply chain / logistique": ("supply chain manager", "logistics manager", "responsable logistique", "approvisionneur", "acheteur", "procurement specialist"),
+    "Commercial / vente": ("commercial", "sales representative", "sales manager", "account manager", "business developer", "business development"),
+    "Marketing / communication": ("marketing manager", "responsable marketing", "marketing specialist", "communication manager", "brand manager"),
+    "Finance / comptabilité": ("comptable", "accountant", "financial analyst", "finance manager", "auditeur", "auditor", "contrôleur de gestion"),
+    "Ressources humaines": ("responsable rh", "hr manager", "human resources", "recruteur", "recruiter", "talent acquisition"),
+    "Informatique / data": ("software engineer", "développeur", "developer", "data analyst", "data scientist", "system administrator", "it manager"),
+}
+_EXPERIENCE_LEVELS = {
+    "Débutant / junior": ("junior", "débutant", "debutant", "entry level", "intern", "stagiaire", "stage", "0-2 ans"),
+    "Intermédiaire": ("mid-level", "intermediate", "confirmé", "confirme", "3-5 ans"),
+    "Senior / expert": ("senior", "expert", "lead", "principal", "manager", "director", "responsable", "6+ ans"),
+}
+_EDUCATION_LEVELS = {
+    "Bac / formation professionnelle": ("bac", "baccalauréat", "baccalaureat", "technicien", "formation professionnelle", "vocational"),
+    "Bac+2 / technicien supérieur": ("bac+2", "bts", "dut", "deug", "associate", "technicien supérieur", "technicien superieur"),
+    "Licence / bachelor": ("licence", "bachelor", "b.sc", "bsc", "b.a", "bac+3"),
+    "Master / ingénieur": ("master", "mba", "m.sc", "msc", "ingénieur", "ingenieur", "engineering", "bac+5"),
+    "Doctorat": ("doctorat", "doctorate", "phd", "ph.d", "thèse", "these"),
+}
+
+
+def _fold_text(value):
+    return quality._fold(str(value or ""))
+
+
+def _first_matching_label(text, mapping, labels=None):
+    folded = _fold_text(text)
+    for key, terms in mapping.items():
+        if any(_fold_text(term) in folded for term in terms):
+            return (labels or {}).get(key, key)
+    return "À vérifier"
+
+
+def _profile_facets(analysis, raw_text="", target_role=""):
+    """Return conservative recruiter facets; unknown values stay explicitly reviewable."""
+    meta = quality_meta(analysis, raw_text)
+    education = " ".join(str(value) for value in (analysis.get("education") or []))
+    experience = " ".join(str(value) for value in (analysis.get("experience") or []))
+    skills = " ".join(str(value) for value in (meta.get("skills") or analysis.get("skills") or []))
+    corpus = " ".join((raw_text, target_role, education, experience, skills))
+    sector = _first_matching_label(corpus, _HUMAN_SECTOR_TERMS, _HUMAN_SECTORS)
+    level = _first_matching_label(corpus, _EXPERIENCE_LEVELS)
+    education_level = _first_matching_label(education or corpus, _EDUCATION_LEVELS)
+    diploma = next((entry.strip() for entry in (analysis.get("education") or []) if str(entry).strip()), "À vérifier")
+    function_text = " ".join((experience, raw_text, skills))
+    function = _first_matching_label(function_text, _HUMAN_FUNCTION_TERMS)
+    return {"sector": sector, "function": function, "experience_level": level,
+            "education_level": education_level, "diploma": diploma[:120]}
+
 
 def actor():
     return st.session_state.get("current_admin_email") or ""
@@ -143,6 +222,7 @@ def _fetch(terms, version):
         email = (row["email"] or "").lower()
         if email:
             emails[email] = emails.get(email, 0) + 1
+        facets = _profile_facets(analysis, row["raw_text"] or "", row["target_role"] or "")
         out.append({
             "id": row["id"], "name": row["full_name"] or "", "email": row["email"] or "",
             "phone": row["phone"] or "", "file": row["source_filename"] or "", "file_type": row["file_type"] or "",
@@ -151,6 +231,7 @@ def _fetch(terms, version):
             "reviewed_by": row["reviewed_by"] or "", "reviewed_at": row["reviewed_at"] or "",
             "target_role": row["target_role"] or "", "created_at": row["created_at"] or "",
             "skills": meta.get("skills") or [],
+            **facets,
         })
     for item in out:
         item["low_conf"] = item["confidence"] is not None and item["confidence"] < quality.LOW_CONFIDENCE
@@ -165,7 +246,9 @@ def fetch_candidates(terms=()):
 def export_frame(rows):
     return pd.DataFrame([{
         "ID": r["id"], "Nom": r["name"], "E-mail": r["email"], "Téléphone": r["phone"], "Fichier": r["file"],
-        "Score indicatif": r["score"], "Confiance d'extraction (%)": round(r["confidence"] * 100) if r["confidence"] is not None else None,
+        "Score format": r["score"], "Confiance extraction (%)": round(r["confidence"] * 100) if r["confidence"] is not None else None,
+        "Secteur": r["sector"], "Fonction": r["function"], "Expérience": r["experience_level"],
+        "Niveau d'études": r["education_level"], "Diplôme / formation": r["diploma"],
         "Statut RH": store.REVIEW_LABELS.get(r["review"], r["review"]),
         "Analyse validée par": r["reviewed_by"], "Critères": r["target_role"],
         "Compétences": ", ".join(r["skills"]), "Reçu le": fmt_dt(r["created_at"]),
@@ -413,8 +496,10 @@ def page_dashboard(app):
         recent = rows[:6]
         event = st.dataframe(
             pd.DataFrame([{
-                "Candidat": r["name"] or "Nom non détecté", "Score": r["score"],
-                "Confiance": round(r["confidence"] * 100) if r["confidence"] is not None else None,
+                "Candidat": r["name"] or "Nom non détecté", "Secteur": r["sector"],
+                "Fonction": r["function"], "Expérience": r["experience_level"],
+                "Études": r["education_level"], "Score format": r["score"],
+                "Confiance extraction (%)": round(r["confidence"] * 100) if r["confidence"] is not None else None,
                 "Statut RH": store.REVIEW_LABELS.get(r["review"]), "Reçu le": to_local(r["created_at"]),
             } for r in recent]),
             hide_index=True, on_select="rerun", selection_mode="single-row", key="dash_recent_table",
@@ -460,10 +545,14 @@ def _table_columns():
     return {
         "ID": st.column_config.NumberColumn("ID", format="#%d", width="small"),
         "Candidat": st.column_config.TextColumn("Candidat", width="medium"),
-        "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d",
-                                                 help="Score indicatif du moteur local — à valider par RH"),
-        "Confiance": st.column_config.ProgressColumn("Confiance", min_value=0, max_value=100, format="%d %%",
-                                                     help="Part des champs clés lus de façon fiable"),
+        "Secteur": st.column_config.TextColumn("Secteur", width="medium"),
+        "Fonction": st.column_config.TextColumn("Fonction", width="large"),
+        "Expérience": st.column_config.TextColumn("Expérience", width="medium"),
+        "Études": st.column_config.TextColumn("Études", width="medium"),
+        "Score format": st.column_config.ProgressColumn("Score format", min_value=0, max_value=100, format="%d",
+                                                       help="Indicateur de lisibilité et de présentation du CV, pas une note du candidat."),
+        "Confiance extraction (%)": st.column_config.ProgressColumn("Confiance extraction (%)", min_value=0, max_value=100, format="%d %%",
+                                                                   help="Estimation de la qualité d'extraction du document."),
         "Compétences": st.column_config.ListColumn("Compétences", width="large"),
         "Reçu le": st.column_config.DatetimeColumn("Reçu le", format="DD/MM/YYYY HH:mm"),
     }
@@ -471,8 +560,12 @@ def _table_columns():
 
 # --------------------------------------------------------------------------- CVthèque
 
-_FILTER_DEFAULTS = {"cv_q": "", "cv_review": [], "cv_conf": "Toutes", "cv_valid": "Toutes", "cv_min_score": 0,
-                    "cv_skill": "Toutes"}
+_FILTER_DEFAULTS = {
+    "cv_q": "", "cv_review": [], "cv_valid": "Toutes", "cv_sector": [],
+    "cv_function": "Toutes", "cv_experience": "Tous", "cv_education": "Tous",
+    "cv_diploma": "Tous", "cv_conf": "Toutes", "cv_min_score": 0,
+    "cv_skill": "Toutes",
+}
 
 
 def _reset_filters():
@@ -508,12 +601,19 @@ def page_cvtheque(app):
             st.text_input("Rechercher", key="cv_q", placeholder="Nom, e-mail, compétence, texte du CV…",
                           icon=":material/search:", width=340)
             st.multiselect("Statut RH", list(store.REVIEW_LABELS), key="cv_review",
-                           format_func=store.REVIEW_LABELS.get, placeholder="Tous", width=230)
-            st.selectbox("Confiance", ["Toutes", "Faible confiance", "Fiable (≥ 60 %)"], key="cv_conf", width=170)
-            st.selectbox("Validation", ["Toutes", "À valider", "Validées"], key="cv_valid", width=140)
-            skills = sorted({s for r in everything for s in r["skills"]}, key=str.lower)
-            st.selectbox("Compétence", ["Toutes"] + skills, key="cv_skill", width=200)
-            st.slider("Score min.", 0, 100, step=5, key="cv_min_score", width=160)
+                           format_func=store.REVIEW_LABELS.get, placeholder="Tous", width=210)
+            sectors = sorted({r["sector"] for r in everything}, key=str.lower)
+            functions = sorted({r["function"] for r in everything if r["function"] != "À vérifier"}, key=str.lower)
+            experience_levels = ["Débutant / junior", "Intermédiaire", "Senior / expert", "À vérifier"]
+            education_levels = ["Bac / formation professionnelle", "Bac+2 / technicien supérieur",
+                                "Licence / bachelor", "Master / ingénieur", "Doctorat", "À vérifier"]
+            diplomas = sorted({r["diploma"] for r in everything if r["diploma"] != "À vérifier"}, key=str.lower)
+            st.multiselect("Secteur", sectors, key="cv_sector", placeholder="Tous", width=220)
+            st.selectbox("Fonction", ["Toutes"] + functions, key="cv_function", width=220)
+            st.selectbox("Expérience", ["Tous"] + experience_levels, key="cv_experience", width=190)
+        with st.container(horizontal=True, vertical_alignment="bottom"):
+            st.selectbox("Niveau d'études", ["Tous"] + education_levels, key="cv_education", width=230)
+            st.selectbox("Diplôme / formation", ["Tous"] + diplomas, key="cv_diploma", width=260)
 
         terms, ignored = quality.sanitize_query(st.session_state.cv_q)
         if ignored:
@@ -522,6 +622,17 @@ def page_cvtheque(app):
                        title="Critères protégés ignorés", icon=":material/shield:")
         rows = fetch_candidates(terms) if terms else everything
         rows = [r for r in rows if _matches(r)]
+
+        with st.expander("Contrôles qualité (facultatif)", expanded=False):
+            st.caption("La confiance mesure la qualité d’extraction et le score mesure le format du CV. Ce ne sont pas des mesures de valeur professionnelle.")
+            st.selectbox("Qualité d'extraction", ["Toutes", "À vérifier (< 60 %)", "Lisible (≥ 60 %)"],
+                         key="cv_conf", width=240)
+            st.slider("Score de format minimum", 0, 100, step=5, key="cv_min_score", width=300)
+            st.selectbox("Validation de l'analyse", ["Toutes", "À valider", "Validées"],
+                         key="cv_valid", width=220)
+            skills = sorted({s for r in everything for s in r["skills"]}, key=str.lower)
+            st.selectbox("Compétence précise", ["Toutes"] + skills, key="cv_skill", width=300)
+            rows = [r for r in rows if _matches(r)]
 
         active = sum(st.session_state[k] != v for k, v in _FILTER_DEFAULTS.items())
         with st.container(horizontal=True, vertical_alignment="center"):
@@ -539,12 +650,11 @@ def page_cvtheque(app):
 
         frame = pd.DataFrame([{
             "ID": r["id"], "Candidat": r["name"] or "Nom non détecté", "E-mail": r["email"] or "—",
-            "Score": r["score"], "Confiance": round(r["confidence"] * 100) if r["confidence"] is not None else None,
+            "Secteur": r["sector"], "Fonction": r["function"], "Expérience": r["experience_level"],
+            "Études": r["education_level"], "Diplôme / formation": r["diploma"],
             "Statut RH": store.REVIEW_LABELS.get(r["review"], r["review"]),
-            "Validation": "Validée" if r["reviewed_by"] else "À valider",
-            "Alertes": " · ".join(filter(None, ["Faible confiance" if r["low_conf"] else "",
-                                                "Doublon probable" if r["probable_dup"] else ""])) or "—",
-            "Compétences": r["skills"][:6], "Fichier": r["file"], "Reçu le": to_local(r["created_at"]),
+            "Qualité extraction": "À vérifier" if r["low_conf"] else "Lisible",
+            "Compétences": r["skills"][:6], "Reçu le": to_local(r["created_at"]),
         } for r in rows])
         event = st.dataframe(frame, hide_index=True, on_select="rerun", selection_mode="multi-row",
                              key="cv_table", column_config=_table_columns(), height=min(560, 38 + 35 * len(rows)),
@@ -559,9 +669,19 @@ def _matches(r):
     s = st.session_state
     if s.cv_review and r["review"] not in s.cv_review:
         return False
-    if s.cv_conf == "Faible confiance" and not r["low_conf"]:
+    if s.cv_sector and r["sector"] not in s.cv_sector:
         return False
-    if s.cv_conf.startswith("Fiable") and r["low_conf"]:
+    if s.cv_function != "Toutes" and r["function"] != s.cv_function:
+        return False
+    if s.cv_experience != "Tous" and r["experience_level"] != s.cv_experience:
+        return False
+    if s.cv_education != "Tous" and r["education_level"] != s.cv_education:
+        return False
+    if s.cv_diploma != "Tous" and r["diploma"] != s.cv_diploma:
+        return False
+    if s.cv_conf == "À vérifier (< 60 %)" and not r["low_conf"]:
+        return False
+    if s.cv_conf.startswith("Lisible") and r["low_conf"]:
         return False
     if s.cv_valid == "À valider" and r["reviewed_by"]:
         return False
