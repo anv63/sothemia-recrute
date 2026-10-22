@@ -45,7 +45,9 @@ import json
 import streamlit as st
 import datetime
 
-SUPPORTED_LEGACY_UPLOAD_EXTENSIONS = ["pdf", "docx", *document_extractor.SUPPORTED_IMAGE_FORMATS]
+SUPPORTED_LEGACY_UPLOAD_EXTENSIONS = [
+    "pdf", "docx", *getattr(document_extractor, "SUPPORTED_IMAGE_FORMATS", {})
+]
 
 st.set_page_config(
     page_title="Sothema HR Intelligence",

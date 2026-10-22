@@ -17,7 +17,8 @@ app = Flask(__name__)
 analyzer = ResumeAnalyzer()
 init_ats_db()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", *(f".{extension}" for extension in document_extractor.SUPPORTED_IMAGE_FORMATS)}
+SUPPORTED_IMAGE_EXTENSIONS = set(getattr(document_extractor, "SUPPORTED_IMAGE_FORMATS", {}))
+SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", *(f".{extension}" for extension in SUPPORTED_IMAGE_EXTENSIONS)}
 
 
 @app.before_request

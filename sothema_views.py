@@ -22,7 +22,10 @@ from sothema_ui import (
 )
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-SUPPORTED_UPLOAD_EXTENSIONS = ["pdf", "docx", *document_extractor.SUPPORTED_IMAGE_FORMATS]
+SUPPORTED_IMAGE_EXTENSIONS = set(getattr(document_extractor, "SUPPORTED_IMAGE_FORMATS", {}))
+SUPPORTED_UPLOAD_EXTENSIONS = [
+    "pdf", "docx", *SUPPORTED_IMAGE_EXTENSIONS
+]
 LOCAL_TZ = datetime.now().astimezone().tzinfo
 SECTION_WEIGHTS = [
     ("contact", "Coordonnées", 10), ("summary", "Résumé professionnel", 10),
@@ -850,7 +853,7 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
         return stop("rejected", "Le fichier dépasse la limite de 10 Mo.")
     if suffix in {"pdf", "docx"} and ((suffix == "pdf" and not data.startswith(b"%PDF")) or (suffix == "docx" and not data.startswith(b"PK"))):
         return stop("rejected", f"Le contenu ne correspond pas à un fichier {suffix.upper()}.")
-    if suffix in document_extractor.SUPPORTED_IMAGE_FORMATS:
+    if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         try:
             document_extractor.validate_image(name, data)
         except ValueError as exc:
