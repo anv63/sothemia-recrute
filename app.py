@@ -32,6 +32,7 @@ from config.database import (
     get_ai_analysis_stats, reset_ai_analysis_stats, get_detailed_ai_analysis_stats
 )
 from utils.ai_resume_analyzer import AIResumeAnalyzer
+from utils import document_extractor
 from utils.resume_builder import ResumeBuilder
 from utils.resume_analyzer import ResumeAnalyzer
 from ats_store import init_ats_db
@@ -44,7 +45,8 @@ import json
 import streamlit as st
 import datetime
 
-# Set page config at the very beginning
+SUPPORTED_LEGACY_UPLOAD_EXTENSIONS = ["pdf", "docx", *document_extractor.SUPPORTED_IMAGE_FORMATS]
+
 st.set_page_config(
     page_title="Sothema HR Intelligence",
     page_icon="assets/sothema-logo.png",
@@ -599,8 +601,7 @@ class ResumeApp:
 
             # File Upload
             uploaded_file = st.file_uploader(
-    "Upload your resume", type=[
-        'pdf', 'docx'], key="standard_file")
+    "Upload your resume", type=SUPPORTED_LEGACY_UPLOAD_EXTENSIONS, key="standard_file")
 
             if not uploaded_file:
                 # Display empty state with a prominent upload button
@@ -650,33 +651,9 @@ class ResumeApp:
                         # Get file content
                         text = ""
                         try:
-                            if uploaded_file.type == "application/pdf":
-                                try:
-                                    text = self.analyzer.extract_text_from_pdf(uploaded_file)
-                                except Exception as pdf_error:
-                                    st.error(f"PDF extraction failed: {str(pdf_error)}")
-                                    st.info("Trying alternative PDF extraction method...")
-                                    # Try AI analyzer as backup
-                                    try:
-                                        text = self.ai_analyzer.extract_text_from_pdf(uploaded_file)
-                                    except Exception as backup_error:
-                                        st.error(f"All PDF extraction methods failed: {str(backup_error)}")
-                                        return
-                            elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                                try:
-                                    text = self.analyzer.extract_text_from_docx(uploaded_file)
-                                except Exception as docx_error:
-                                    st.error(f"DOCX extraction failed: {str(docx_error)}")
-                                    # Try AI analyzer as backup
-                                    try:
-                                        text = self.ai_analyzer.extract_text_from_docx(uploaded_file)
-                                    except Exception as backup_error:
-                                        st.error(f"All DOCX extraction methods failed: {str(backup_error)}")
-                                        return
-                            else:
-                                text = uploaded_file.getvalue().decode()
-                                
-                            if not text or text.strip() == "":
+                            extraction = document_extractor.extract_document(uploaded_file.name, uploaded_file.getvalue())
+                            text = extraction.display_text or extraction.normalized_text or ""
+                            if not text.strip():
                                 st.error("Could not extract any text from the uploaded file. Please try a different file.")
                                 return
                         except Exception as e:
@@ -1635,8 +1612,7 @@ class ResumeApp:
 
             # File Upload for AI Analysis
             uploaded_file = st.file_uploader(
-    "Upload your resume", type=[
-        'pdf', 'docx'], key="ai_file")
+    "Upload your resume", type=SUPPORTED_LEGACY_UPLOAD_EXTENSIONS, key="ai_file")
 
             if not uploaded_file:
             # Display empty state with a prominent upload button
@@ -1659,14 +1635,8 @@ class ResumeApp:
                         # Get file content
                         text = ""
                         try:
-                            if uploaded_file.type == "application/pdf":
-                                text = self.analyzer.extract_text_from_pdf(
-                                    uploaded_file)
-                            elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                                text = self.analyzer.extract_text_from_docx(
-                                    uploaded_file)
-                            else:
-                                text = uploaded_file.getvalue().decode()
+                            extraction = document_extractor.extract_document(uploaded_file.name, uploaded_file.getvalue())
+                            text = extraction.display_text or extraction.normalized_text or ""
                         except Exception as e:
                             st.error(f"Error reading file: {str(e)}")
                             st.stop()
@@ -1685,15 +1655,8 @@ class ResumeApp:
                                 
                                 # Extract text from the resume
                                 analyzer = AIResumeAnalyzer()
-                                if uploaded_file.type == "application/pdf":
-                                    resume_text = analyzer.extract_text_from_pdf(
-                                        uploaded_file)
-                                elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                                    resume_text = analyzer.extract_text_from_docx(
-                                        uploaded_file)
-                                else:
-                                    # For text files or other formats
-                                    resume_text = uploaded_file.getvalue().decode('utf-8')
+                                extraction = document_extractor.extract_document(uploaded_file.name, uploaded_file.getvalue())
+                                resume_text = extraction.display_text or extraction.normalized_text or ""
                                 
                                 # Initialize the AI analyzer (moved after text extraction)
                                 progress_bar.progress(30)

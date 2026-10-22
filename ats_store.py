@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from config import supabase_store
+from utils import document_extractor
 
 DB_PATH = Path(os.environ.get("SOTHEMA_DB_PATH") or Path(__file__).resolve().parent / "resume_data.db")
 REVIEW_LABELS = {
@@ -171,6 +172,10 @@ def find_by_email(email, exclude_id=None):
         connection.close()
 
 
+def _mime_for_type(file_type):
+    return document_extractor.FILE_MIME_TYPES.get(str(file_type or "").lower(), "application/octet-stream")
+
+
 def _candidate_payload(filename, file_bytes, raw_text, analysis, full_name, score, confidence, target_role, actor):
     safe_name = Path(filename).name
     sha = fingerprint(file_bytes)
@@ -200,8 +205,7 @@ def save_candidate(filename, file_bytes, raw_text, analysis, *, full_name=None, 
             raise DuplicateCandidateError(existing)
         object_id = uuid.uuid4().hex
         object_key = f"{object_id[:2]}/{object_id}.{payload['file_type']}"
-        mime = "application/pdf" if payload["file_type"] == "pdf" else \
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        mime = _mime_for_type(payload["file_type"])
         uploaded = False
         payload["storage_key"] = object_key
         try:
@@ -381,6 +385,48 @@ def update_local_analysis(candidate_id, analysis, *, score, confidence, target_r
                 (serialized, serialized, score, confidence, target_role or "", now, candidate_id))
             _audit(connection, "analysis_rerun", candidate_id, {"criteria": target_role or "générale",
                 "previous_score": previous["score"] if previous else None, "score": score}, actor)
+    finally:
+        connection.close()
+
+
+def update_profile(candidate_id, analysis, *, full_name="", email="", phone="", summary="", actor=""):
+    """Persist AI-verified profile fields without changing score or RH validation state."""
+    now = _now()
+    payload = json.loads(json.dumps(analysis, ensure_ascii=False, default=str))
+    values = {
+        "full_name": str(full_name or payload.get("name") or "").strip(),
+        "email": str(email or payload.get("email") or "").strip().lower(),
+        "phone": str(phone or payload.get("phone") or "").strip(),
+        "summary": str(summary or payload.get("summary") or "").strip(),
+    }
+    if backend_name() == "supabase":
+        supabase_store.rpc("ats_update_profile", {
+            "p_id": candidate_id, "p_analysis": payload,
+            "p_full_name": values["full_name"], "p_email": values["email"],
+            "p_phone": values["phone"], "p_summary": values["summary"],
+            "p_actor": actor or "",
+        })
+        return
+    serialized = json.dumps(payload, ensure_ascii=False)
+    connection = conn()
+    try:
+        with connection:
+            previous = connection.execute(
+                "SELECT full_name,email,phone FROM ats_candidates WHERE id=?", (candidate_id,)
+            ).fetchone()
+            if not previous:
+                raise ValueError("Candidate not found")
+            connection.execute(
+                """UPDATE ats_candidates
+                   SET full_name=?,email=?,phone=?,summary=?,local_analysis_json=?,structured_json=?,updated_at=?
+                   WHERE id=?""",
+                (values["full_name"], values["email"], values["phone"], values["summary"],
+                 serialized, serialized, now, candidate_id),
+            )
+            _audit(connection, "profile_reextracted", candidate_id, {
+                "previous_name": previous["full_name"], "name": values["full_name"],
+                "fields": sorted((payload.get("ai_profile") or {}).keys()),
+            }, actor)
     finally:
         connection.close()
 

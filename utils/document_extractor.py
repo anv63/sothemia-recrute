@@ -19,6 +19,26 @@ from statistics import median
 from typing import Callable, Iterable
 
 
+SUPPORTED_IMAGE_FORMATS = {
+    "png": ("PNG", "image/png"),
+    "jpg": ("JPEG", "image/jpeg"),
+    "jpeg": ("JPEG", "image/jpeg"),
+    "tif": ("TIFF", "image/tiff"),
+    "tiff": ("TIFF", "image/tiff"),
+    "bmp": ("BMP", "image/bmp"),
+    "gif": ("GIF", "image/gif"),
+    "webp": ("WEBP", "image/webp"),
+}
+SUPPORTED_FILE_EXTENSIONS = ("pdf", "docx", *SUPPORTED_IMAGE_FORMATS)
+FILE_MIME_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    **{extension: mime for extension, (_, mime) in SUPPORTED_IMAGE_FORMATS.items()},
+}
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_FRAMES = 12
+
+
 Progress = Callable[[str], None] | None
 
 
@@ -169,10 +189,14 @@ def _pdf_page_lines(page, page_number: int, result: ExtractionResult) -> list[So
 
     if visual:
         if two_columns:
-            full = [line for line in visual if line["x0"] <= width * 0.12 and line["x1"] >= width * 0.88]
-            left = [line for line in visual if line not in full and (line["x0"] + line["x1"]) / 2 < width * 0.5]
-            right = [line for line in visual if line not in full and (line["x0"] + line["x1"]) / 2 >= width * 0.5]
-            ordered = [(line, None) for line in sorted(full, key=lambda x: x["top"])]
+            header = [line for line in visual if line["top"] <= float(getattr(page, "height", 0) or 0) * 0.1]
+            header_ids = {id(line) for line in header}
+            remaining = [line for line in visual if id(line) not in header_ids]
+            full = [line for line in remaining if line["x0"] <= width * 0.12 and line["x1"] >= width * 0.88]
+            left = [line for line in remaining if line not in full and (line["x0"] + line["x1"]) / 2 < width * 0.5]
+            right = [line for line in remaining if line not in full and (line["x0"] + line["x1"]) / 2 >= width * 0.5]
+            ordered = [(line, None) for line in sorted(header, key=lambda x: x["top"])]
+            ordered += [(line, None) for line in sorted(full, key=lambda x: x["top"])]
             ordered += [(line, 1) for line in sorted(left, key=lambda x: x["top"])]
             ordered += [(line, 2) for line in sorted(right, key=lambda x: x["top"])]
             method = "pdf_text_columns"
@@ -243,6 +267,95 @@ def _ocr_pdf_page(page, page_number: int) -> list[SourceLine]:
         return [SourceLine(line, page_number, 0, "ocr") for line in text.splitlines() if _clean_text(line)]
     except Exception:
         return []
+
+
+def validate_image(filename: str, content: bytes):
+    """Validate an uploaded raster image and return its format metadata."""
+    suffix = Path(filename).suffix.lower().lstrip(".")
+    if suffix not in SUPPORTED_IMAGE_FORMATS:
+        raise ValueError("Unsupported image format. Use PNG, JPG, TIFF, BMP, GIF or WebP.")
+    if not content:
+        raise ValueError("The image is empty.")
+    try:
+        from PIL import Image, ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = False
+        with Image.open(io.BytesIO(content)) as image:
+            detected = (image.format or "").upper()
+            expected = SUPPORTED_IMAGE_FORMATS[suffix][0]
+            if detected != expected:
+                raise ValueError(f"File extension .{suffix} does not match its image signature.")
+            width, height = image.size
+            if width < 20 or height < 20:
+                raise ValueError("The image dimensions are too small to contain a CV.")
+            if width * height > MAX_IMAGE_PIXELS:
+                raise ValueError("The image dimensions exceed the safety limit.")
+            frames = int(getattr(image, "n_frames", 1) or 1)
+            if frames > MAX_IMAGE_FRAMES:
+                raise ValueError(f"The image contains too many pages/frames (maximum {MAX_IMAGE_FRAMES}).")
+            image.verify()
+            return {"format": detected, "width": width, "height": height, "frames": frames}
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"The image is corrupt or unreadable: {exc}") from exc
+
+
+def _ocr_image_frame(image, page_number: int) -> list[SourceLine]:
+    if not _tesseract_available():
+        return []
+    try:
+        import pytesseract
+        from PIL import ImageOps
+        prepared = ImageOps.exif_transpose(image).convert("RGB")
+        data = pytesseract.image_to_data(prepared, config="--psm 3", output_type=pytesseract.Output.DICT)
+        grouped = {}
+        for index, text in enumerate(data.get("text", [])):
+            text = _clean_text(text)
+            if not text:
+                continue
+            key = (data.get("block_num", [0])[index], data.get("par_num", [0])[index],
+                   data.get("line_num", [0])[index])
+            grouped.setdefault(key, {"words": [], "confidence": []})
+            grouped[key]["words"].append(text)
+            try:
+                confidence = float(data.get("conf", [0])[index])
+                if confidence >= 0:
+                    grouped[key]["confidence"].append(confidence)
+            except (TypeError, ValueError):
+                pass
+        lines = []
+        for values in grouped.values():
+            text = _clean_text(" ".join(values["words"]))
+            if text:
+                lines.append(SourceLine(text, page_number, 0, "ocr_image", "body"))
+        return lines
+    except Exception:
+        return []
+
+
+def extract_image(filename: str, content: bytes, progress: Progress = None) -> ExtractionResult:
+    metadata = validate_image(filename, content)
+    result = ExtractionResult(Path(filename).name, Path(filename).suffix.lower().lstrip("."), page_count=metadata["frames"])
+    if not _tesseract_available():
+        result.warnings.append("ocr_unavailable")
+        result.empty_pages = list(range(1, metadata["frames"] + 1))
+        return _finalize(result)
+    try:
+        from PIL import Image, ImageSequence
+        with Image.open(io.BytesIO(content)) as image:
+            for page_number, frame in enumerate(ImageSequence.Iterator(image), start=1):
+                _notify(progress, f"Page {page_number}/{metadata['frames']} — OCR de l'image")
+                lines = _ocr_image_frame(frame, page_number)
+                if lines:
+                    result.source_lines.extend(lines)
+                    result.methods.append("ocr_image")
+                else:
+                    result.empty_pages.append(page_number)
+                    result.warnings.append(f"ocr_empty_page_{page_number}")
+    except Exception as exc:
+        result.warnings.append(f"image_ocr_error:{type(exc).__name__}")
+    result.ocr_pages = list(range(1, metadata["frames"] + 1))
+    return _finalize(result)
 
 
 def _remove_repeated_headers(lines: list[SourceLine], page_count: int, result: ExtractionResult) -> list[SourceLine]:
@@ -450,7 +563,9 @@ def extract_document(filename: str, content: bytes, progress: Progress = None) -
         return extract_pdf(filename, content, progress)
     if suffix == ".docx":
         return extract_docx(filename, content, progress)
-    raise ValueError("Only PDF and DOCX documents are supported")
+    if suffix.lstrip(".") in SUPPORTED_IMAGE_FORMATS:
+        return extract_image(filename, content, progress)
+    raise ValueError("Only PDF, DOCX, PNG, JPG, TIFF, BMP, GIF and WebP documents are supported")
 
 
 def runtime_capabilities() -> dict[str, str | bool]:

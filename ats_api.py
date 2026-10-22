@@ -17,6 +17,7 @@ app = Flask(__name__)
 analyzer = ResumeAnalyzer()
 init_ats_db()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", *(f".{extension}" for extension in document_extractor.SUPPORTED_IMAGE_FORMATS)}
 
 
 @app.before_request
@@ -91,16 +92,23 @@ def candidate(cid):
 def upload():
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
-        return jsonify({"error": "A PDF or DOCX file is required"}), 400
+        return jsonify({"error": "A PDF, DOCX or supported image file is required"}), 400
     filename = Path(uploaded.filename).name
     suffix = Path(filename).suffix.lower()
     content = uploaded.read()
-    if suffix not in {".pdf", ".docx"}:
-        return jsonify({"error": "Only PDF and DOCX files are accepted"}), 400
+    if suffix not in SUPPORTED_UPLOAD_EXTENSIONS:
+        return jsonify({"error": "Only PDF, DOCX, PNG, JPG/JPEG, TIFF, BMP, GIF and WebP files are accepted"}), 400
     if len(content) > MAX_UPLOAD_BYTES:
         return jsonify({"error": "File exceeds the 10 MB limit"}), 413
-    if not content or (suffix == ".pdf" and not content.startswith(b"%PDF")) or (suffix == ".docx" and not content.startswith(b"PK")):
-        return jsonify({"error": "File signature is invalid or the file is empty"}), 400
+    if suffix in {".pdf", ".docx"}:
+        valid_signature = (suffix == ".pdf" and content.startswith(b"%PDF")) or (suffix == ".docx" and content.startswith(b"PK"))
+        if not content or not valid_signature:
+            return jsonify({"error": "File signature is invalid or the file is empty"}), 400
+    else:
+        try:
+            document_extractor.validate_image(filename, content)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
     try:
         extraction = document_extractor.extract_document(filename, content)
         raw = extraction.normalized_text

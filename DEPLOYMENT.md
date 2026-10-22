@@ -233,11 +233,13 @@ If you encounter issues on Windows:
 - [Streamlit Deployment](https://docs.streamlit.io/streamlit-cloud/get-started/deploy-an-app) 
 ## CV extraction capabilities
 
-The ATS extraction pipeline preserves PDF reading order, detects columns and tables, parses DOCX tables/headers/footers/text boxes, and records page/line provenance. PDF text extraction works with `pdfplumber`; PDF rendering uses Poppler (`pdftoppm`/`pdftocairo`). Scanned pages require the system Tesseract executable for OCR:
+The ATS extraction pipeline preserves PDF reading order, detects columns and tables, parses DOCX tables/headers/footers/text boxes, and records page/line provenance. It also accepts PNG, JPG/JPEG, TIFF, BMP, GIF and WebP CV images and extracts their text with server-side Tesseract OCR. PDF text extraction works with `pdfplumber`; PDF rendering uses Poppler (`pdftoppm`/`pdftocairo`). Scanned pages and raster images require the system Tesseract executable and language data for OCR:
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng
 ```
 
-If Tesseract is unavailable, text-based designed CVs still work, but image-only pages are marked `ocr_unavailable` and require manual review. The application never fabricates fields for unreadable pages.
+If Tesseract is unavailable, text-based CVs still work, but image-only pages and image uploads are marked `ocr_unavailable` and no candidate is saved without readable text. The application never fabricates fields for unreadable pages.
+
+For an existing Supabase deployment, apply migrations `002_profile_reextraction.sql` and then `003_image_cv_types.sql` from the Supabase SQL Editor before enabling manual AI profile re-extraction or image CV uploads. These are additive migrations; pushing application code does not execute them automatically. Keep the candidate Storage bucket private.

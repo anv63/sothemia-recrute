@@ -17,6 +17,7 @@ AUDIT_LABELS = {
     "review_status_changed": "Statut RH modifié",
     "analysis_validated": "Analyse validée",
     "analysis_rerun": "Analyse recalculée",
+    "profile_reextracted": "Profil réextrait avec l'IA",
     "notes_saved": "Notes RH enregistrées",
     "ai_analysis_saved": "Analyse IA enregistrée",
     "candidate_deleted": "Dossier supprimé",

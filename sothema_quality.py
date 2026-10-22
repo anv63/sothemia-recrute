@@ -4,6 +4,7 @@ The analyzer's scoring logic is untouched. This module only decides what text it
 scores (protected attributes removed first), how confident the extraction is,
 and where each extracted element can be found in the source CV.
 """
+import json
 import re
 import unicodedata
 
@@ -78,6 +79,100 @@ FIELD_LABELS = {
 }
 
 LOW_CONFIDENCE = 0.6
+PROFILE_FIELDS = {
+    "name", "email", "phone", "location", "headline", "linkedin", "github", "portfolio",
+    "languages", "education", "experience", "profile_summary",
+}
+_PROFILE_PROTECTED_FIELDS = {
+    "age", "birth_date", "date_of_birth", "gender", "sex", "nationality", "citizenship",
+    "family_status", "marital_status", "photo", "image", "ethnicity", "religion",
+}
+_PROFILE_LIST_FIELDS = {"languages", "education", "experience"}
+
+
+def _compact(value):
+    """Fold text for evidence matching when layout punctuation is unreliable."""
+    return re.sub(r"[^a-z0-9]+", "", _fold(value or ""))
+
+
+def _source_contains(source, needle):
+    """Match extracted evidence despite line wrapping, Unicode or contact punctuation."""
+    source_folded = re.sub(r"\s+", " ", _fold(source or "")).strip()
+    needle_folded = re.sub(r"\s+", " ", _fold(needle or "")).strip()
+    if not source_folded or not needle_folded:
+        return False
+    if needle_folded in source_folded:
+        return True
+    compact_needle = _compact(needle)
+    compact_source = _compact(source)
+    return len(compact_needle) >= 7 and compact_needle in compact_source
+
+
+def _quote_for(source_quotes, key, index):
+    raw = source_quotes.get(key) if isinstance(source_quotes, dict) else None
+    if isinstance(raw, list):
+        return raw[index] if index < len(raw) else ""
+    return raw if index == 0 and isinstance(raw, str) else ""
+
+
+def normalize_ai_profile(value, source_text, name_source_text=None):
+    """Validate AI values against source quotes; never accept inferred values."""
+    if not isinstance(value, dict):
+        raise ValueError("AI profile must be a JSON object")
+    source_text = source_text or ""
+    name_source_text = name_source_text or source_text
+    result = {}
+    evidence = {}
+    source_quotes = value.get("source_quotes") or value.get("evidence") or {}
+    if not isinstance(source_quotes, dict):
+        source_quotes = {}
+    for key, raw in value.items():
+        key = str(key).strip().lower()
+        if key in _PROFILE_PROTECTED_FIELDS or key in {"source_quotes", "evidence"}:
+            continue
+        if key not in PROFILE_FIELDS:
+            continue
+        is_list = key in _PROFILE_LIST_FIELDS
+        values = raw if is_list and isinstance(raw, list) else [raw]
+        accepted, accepted_quotes = [], []
+        for index, item in enumerate(values):
+            if not isinstance(item, str):
+                continue
+            text = re.sub(r"\s+", " ", item).strip()
+            if not text or len(text) > (500 if key in {"education", "experience", "profile_summary"} else 240):
+                continue
+            if key == "name" and not plausible_name(text):
+                continue
+            quote = re.sub(r"\s+", " ", str(_quote_for(source_quotes, key, index) or "")).strip()
+            # Backward-compatible fallback for older model output: only accept an exact source value.
+            evidence_text = quote or text
+            redacted_value, protected_value = redact_protected(text)
+            redacted_quote, protected_quote = redact_protected(evidence_text)
+            if protected_value or redacted_value.strip() != text or protected_quote or redacted_quote.strip() != evidence_text:
+                continue
+            validation_source = name_source_text if key == "name" else source_text
+            if not _source_contains(validation_source, evidence_text):
+                continue
+            if not _source_contains(validation_source, text):
+                continue
+            accepted.append(text)
+            accepted_quotes.append(evidence_text)
+        if is_list:
+            if accepted:
+                unique = {}
+                for item, quote in zip(accepted, accepted_quotes):
+                    unique.setdefault(item, quote)
+                result[key] = list(unique)[:12]
+                evidence[key] = [unique[item] for item in result[key]]
+        elif accepted:
+            result[key] = accepted[0]
+            evidence[key] = accepted_quotes[0]
+    if not result:
+        raise ValueError("AI profile had no verifiable values found in the extracted CV text")
+    result["source"] = "ai_verified_against_cv_text"
+    result["field_evidence"] = evidence
+    result["needs_human_review"] = True
+    return result
 
 
 def _fold(text):
@@ -142,12 +237,56 @@ def plausible_name(value):
     return not ({w.lower() for w in words} & _NOT_A_NAME)
 
 
-def detect_name(raw_text, analyzer_name):
-    """Use the analyzer's guess when plausible, else the first plausible line among the first five."""
+def _visual_lines(extraction):
+    if extraction is None:
+        return []
+    lines = extraction.evidence_lines or [item.as_dict() for item in extraction.source_lines]
+    return sorted(
+        (item for item in lines if item.get("text")),
+        key=lambda item: (item.get("page") or 1, (item.get("bbox") or [float("inf")])[1]
+                          if item.get("bbox") else float("inf"), item.get("line") or 0),
+    )
+
+
+def profile_header_context(extraction, limit=16):
+    """Return the topmost visual PDF/DOCX lines, not parser column concatenation order."""
+    return "\n".join(item["text"] for item in _visual_lines(extraction)[:limit])
+
+
+def detect_name(raw_text, analyzer_name, extraction=None):
+    """Prefer plausible names in the visual document header over parser text order."""
     if plausible_name(analyzer_name):
         return analyzer_name.strip(), 1, 0.85
+
+    visual = _visual_lines(extraction)
+    if visual:
+        bbox_items = [(item, item.get("bbox")) for item in visual if item.get("bbox") and len(item["bbox"]) >= 4]
+        heights = [max(0.0, float(box[3]) - float(box[1])) for _, box in bbox_items]
+        median_height = sorted(heights)[len(heights) // 2] if heights else 0.0
+        page_tops = {}
+        for item, box in bbox_items:
+            page_tops[item.get("page") or 1] = max(page_tops.get(item.get("page") or 1, 0.0), float(box[3]))
+        candidates = []
+        for item in visual:
+            text = item["text"].strip()
+            box = item.get("bbox")
+            if not box or len(box) < 4 or not plausible_name(text):
+                continue
+            page = item.get("page") or 1
+            top = float(box[1])
+            height = max(0.0, float(box[3]) - top)
+            # Names generally live in the header; larger type is useful evidence, not proof.
+            top_fraction = top / max(page_tops.get(page, 1.0), 1.0)
+            if top_fraction > 0.24:
+                continue
+            prominent = height >= median_height * 1.2 if median_height else False
+            candidates.append((page, top, 0 if prominent else 1, -height, item))
+        if candidates:
+            _, _, _, _, selected = min(candidates, key=lambda candidate: candidate[:4])
+            return selected["text"].strip(), selected.get("line"), 0.9
+
     lines = [line.strip() for line in (raw_text or "").splitlines() if line.strip()]
-    for index, line in enumerate(lines[:5], start=1):
+    for index, line in enumerate(lines[:12], start=1):
         if plausible_name(line):
             return line, index, 0.7
     return "", None, 0.0
@@ -164,6 +303,37 @@ def clean_skills(skills):
             seen.add(key)
             out.append(skill)
     return out[:40]
+
+
+def apply_ai_profile(analysis, profile, source_text, name_source_text=None):
+    """Merge verified profile fields without changing scores or extraction confidence."""
+    normalized = normalize_ai_profile(profile, source_text, name_source_text=name_source_text)
+    updated = dict(analysis)
+    updated["ai_profile"] = normalized
+    for key in ("name", "email", "phone", "linkedin", "github", "portfolio"):
+        value = normalized.get(key)
+        if value:
+            updated[key] = value
+    # These are profile facts, not scoring inputs. Keep them available to the CVthèque.
+    for key in ("location", "headline", "languages", "education", "experience", "profile_summary"):
+        if normalized.get(key):
+            updated.setdefault("ai_profile_fields", {})[key] = normalized[key]
+    if normalized.get("education"):
+        updated["education"] = list(normalized["education"])
+    if normalized.get("experience"):
+        updated["experience"] = list(normalized["experience"])
+    if normalized.get("profile_summary"):
+        updated["summary"] = normalized["profile_summary"]
+    meta = dict(updated.get("sothema") or {})
+    if normalized.get("name"):
+        meta["name"] = normalized["name"]
+    meta["profile_extraction"] = {
+        "source": normalized["source"],
+        "fields": sorted(k for k in normalized if k not in {"source", "field_evidence", "needs_human_review"}),
+        "needs_human_review": True,
+    }
+    updated["sothema"] = meta
+    return updated
 
 
 def field_confidence(raw_text, name_confidence, analysis, skills, extraction=None):
@@ -245,7 +415,9 @@ def prepare_analysis(raw_text, analyzer, role_info=None, criteria_label="", extr
         analysis.setdefault("suggestions", []).insert(0, "Vérifier manuellement le type de document : la mise en page est atypique.")
     elif document_type != "resume":
         return analysis
-    name, name_line, name_confidence = detect_name(raw_text or analysis_text, analysis.get("name"))
+    name, name_line, name_confidence = detect_name(raw_text or analysis_text, analysis.get("name"), extraction)
+    if name:
+        analysis["name"] = name
     skills = clean_skills(analysis.get("skills"))
     fields = field_confidence(analysis_text, name_confidence, analysis, skills, extraction)
     field_average = sum(fields.values()) / len(fields)

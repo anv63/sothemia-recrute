@@ -22,6 +22,7 @@ from sothema_ui import (
 )
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+SUPPORTED_UPLOAD_EXTENSIONS = ["pdf", "docx", *document_extractor.SUPPORTED_IMAGE_FORMATS]
 LOCAL_TZ = datetime.now().astimezone().tzinfo
 SECTION_WEIGHTS = [
     ("contact", "Coordonnées", 10), ("summary", "Résumé professionnel", 10),
@@ -104,7 +105,7 @@ def _profile_facets(analysis, raw_text="", target_role=""):
     education = " ".join(str(value) for value in (analysis.get("education") or []))
     experience = " ".join(str(value) for value in (analysis.get("experience") or []))
     skills = " ".join(str(value) for value in (meta.get("skills") or analysis.get("skills") or []))
-    corpus = " ".join((raw_text, target_role, education, experience, skills))
+    corpus = " ".join((raw_text, education, experience, skills))
     sector = _first_matching_label(corpus, _HUMAN_SECTOR_TERMS, _HUMAN_SECTORS)
     level = _first_matching_label(corpus, _EXPERIENCE_LEVELS)
     education_level = _first_matching_label(education or corpus, _EDUCATION_LEVELS)
@@ -217,20 +218,26 @@ def _fetch(terms, version):
     out = []
     for row in rows:
         analysis = parse_json(row["local_analysis_json"])
-        meta = quality_meta(analysis, "", row["full_name"] or "")
+        profile = analysis.get("ai_profile") or {}
+        canonical_name = profile.get("name") or row["full_name"] or analysis.get("name") or ""
+        canonical_email = row["email"] or profile.get("email") or analysis.get("email") or ""
+        canonical_phone = row["phone"] or profile.get("phone") or analysis.get("phone") or ""
+        meta = quality_meta(analysis, "", canonical_name)
         confidence = row["confidence"] if row["confidence"] is not None else meta.get("confidence")
-        email = (row["email"] or "").lower()
+        email = canonical_email.lower()
         if email:
             emails[email] = emails.get(email, 0) + 1
         facets = _profile_facets(analysis, row["raw_text"] or "", row["target_role"] or "")
         out.append({
-            "id": row["id"], "name": row["full_name"] or "", "email": row["email"] or "",
-            "phone": row["phone"] or "", "file": row["source_filename"] or "", "file_type": row["file_type"] or "",
+            "id": row["id"], "name": canonical_name, "email": canonical_email,
+            "phone": canonical_phone, "file": row["source_filename"] or "", "file_type": row["file_type"] or "",
             "size": row["file_size"] or 0, "score": row["score"] if row["score"] is not None else analysis.get("ats_score"),
             "confidence": confidence, "review": row["review"] or "a_examiner",
             "reviewed_by": row["reviewed_by"] or "", "reviewed_at": row["reviewed_at"] or "",
             "target_role": row["target_role"] or "", "created_at": row["created_at"] or "",
             "skills": meta.get("skills") or [],
+            "ai_profile": profile,
+            "location": profile.get("location", ""),
             **facets,
         })
     for item in out:
@@ -648,19 +655,48 @@ def page_cvtheque(app):
             st.space("small")
             return
 
-        frame = pd.DataFrame([{
-            "ID": r["id"], "Candidat": r["name"] or "Nom non détecté", "E-mail": r["email"] or "—",
-            "Secteur": r["sector"], "Fonction": r["function"], "Expérience": r["experience_level"],
-            "Études": r["education_level"], "Diplôme / formation": r["diploma"],
-            "Statut RH": store.REVIEW_LABELS.get(r["review"], r["review"]),
-            "Qualité extraction": "À vérifier" if r["low_conf"] else "Lisible",
-            "Compétences": r["skills"][:6], "Reçu le": to_local(r["created_at"]),
-        } for r in rows])
-        event = st.dataframe(frame, hide_index=True, on_select="rerun", selection_mode="multi-row",
-                             key="cv_table", column_config=_table_columns(), height=min(560, 38 + 35 * len(rows)),
-                             alt="Liste des dossiers candidats")
+        selected_ids = set()
+        with st.container(border=True, key="card-cv-profiles"):
+            for profile_row in rows:
+                with st.container(border=True, key=f"cv_profile_{profile_row['id']}"):
+                    top = st.container(horizontal=True, vertical_alignment="center")
+                    with top:
+                        st.markdown(f"### {md(profile_row['name'] or 'Nom non détecté')} · #{profile_row['id']}")
+                        st.badge(store.REVIEW_LABELS.get(profile_row["review"], profile_row["review"]))
+                        st.badge(profile_row["sector"])
+                        st.badge(profile_row["experience_level"])
+                    st.caption(" · ".join(filter(None, [profile_row["function"], profile_row["education_level"],
+                                                           profile_row["diploma"], fmt_dt(profile_row["created_at"])])))
+                    profile = profile_row.get("ai_profile") or {}
+                    contacts = [profile_row["email"] or profile.get("email"), profile_row["phone"] or profile.get("phone"),
+                                profile_row["location"] or profile.get("location")]
+                    st.caption(" · ".join(md(value) for value in contacts if value) or "Coordonnées : à vérifier dans le CV")
+                    if profile.get("profile_summary"):
+                        st.write(md(profile["profile_summary"]))
+                    profile_details = []
+                    if profile.get("languages"):
+                        profile_details.append("Langues : " + ", ".join(profile["languages"]))
+                    if profile.get("education"):
+                        profile_details.append("Formation : " + "; ".join(profile["education"]))
+                    if profile_details:
+                        st.caption(" · ".join(md(value) for value in profile_details))
+                    links = [("LinkedIn", profile.get("linkedin")), ("GitHub", profile.get("github")),
+                             ("Portfolio", profile.get("portfolio"))]
+                    safe_links = [(label, value) for label, value in links
+                                  if isinstance(value, str) and value.startswith("https://")]
+                    if safe_links:
+                        with st.container(horizontal=True):
+                            for label, url in safe_links:
+                                st.link_button(label, url, help=f"Ouvrir le {label} extrait du CV")
+                    with st.container(horizontal=True, vertical_alignment="center"):
+                        st.caption("Compétences : " + (", ".join(profile_row["skills"][:8]) or "non détectées"))
+                        st.caption("Extraction à vérifier" if profile_row["low_conf"] or not profile else "Profil extrait · vérification RH requise")
+                        if st.button("Ouvrir le dossier", icon=":material/open_in_new:", key=f"cv_profile_open_{profile_row['id']}"):
+                            goto("dossier", id=profile_row["id"])
+                        if st.checkbox("Sélectionner", key=f"cv_profile_select_{profile_row['id']}"):
+                            selected_ids.add(profile_row["id"])
 
-    selected = [rows[i] for i in event.selection.rows if i < len(rows)]
+        selected = [r for r in rows if r["id"] in selected_ids]
     if selected:
         _bulk_bar(selected)
 
@@ -749,9 +785,9 @@ def page_import(app):
     main, side = st.columns([8, 4])
     with main:
         with st.container(border=True, key="card-import-upload"):
-            files = st.file_uploader("Déposer des CV", type=["pdf", "docx"], accept_multiple_files=True,
+            files = st.file_uploader("Déposer des CV", type=SUPPORTED_UPLOAD_EXTENSIONS, accept_multiple_files=True,
                                      key=f"so_uploader_{st.session_state.uploader_round}",
-                                     help="PDF ou DOCX · 10 Mo maximum par fichier")
+                                     help="PDF, DOCX, PNG, JPG/JPEG, TIFF, BMP, GIF ou WebP · 10 Mo maximum par fichier. Les images sont lues par OCR.")
             option = st.selectbox("Critères de poste (facultatif)", role_options(app.job_roles), key="import_role",
                                   help="Sans critères, la composante « compétences requises » du score n'est pas évaluée.")
             run = st.button(f"Analyser et enregistrer {plural(len(files or []), 'fichier')}", type="primary",
@@ -772,7 +808,7 @@ def page_import(app):
         with st.container(border=True, key="card-import-controls"):
             st.subheader("Contrôles appliqués")
             st.html('<dl class="so-kv">'
-                    '<dt>Formats</dt><dd>PDF et DOCX uniquement (signature du fichier vérifiée)</dd>'
+                    '<dt>Formats</dt><dd>PDF, DOCX et images PNG/JPG/TIFF/BMP/GIF/WebP (signature vérifiée)</dd>'
                     '<dt>Taille</dt><dd>10 Mo maximum, fichiers vides refusés</dd>'
                     '<dt>Doublon exact</dt><dd>Empreinte SHA-256 identique → refusé, lien vers l\'existant</dd>'
                     '<dt>Doublon probable</dt><dd>Même e-mail qu\'un dossier existant → avertissement</dd>'
@@ -806,14 +842,19 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
         return {"outcome": kind, "filename": name, "message": reason}
 
     say("Reçu — contrôle du format, de la taille et de l'empreinte")
-    if suffix not in {"pdf", "docx"}:
-        return stop("rejected", "Format non pris en charge : PDF ou DOCX uniquement.")
+    if suffix not in SUPPORTED_UPLOAD_EXTENSIONS:
+        return stop("rejected", "Format non pris en charge : PDF, DOCX, PNG, JPG/JPEG, TIFF, BMP, GIF ou WebP uniquement.")
     if not data:
         return stop("rejected", "Le fichier est vide.")
     if len(data) > MAX_UPLOAD_BYTES:
         return stop("rejected", "Le fichier dépasse la limite de 10 Mo.")
-    if (suffix == "pdf" and not data.startswith(b"%PDF")) or (suffix == "docx" and not data.startswith(b"PK")):
+    if suffix in {"pdf", "docx"} and ((suffix == "pdf" and not data.startswith(b"%PDF")) or (suffix == "docx" and not data.startswith(b"PK"))):
         return stop("rejected", f"Le contenu ne correspond pas à un fichier {suffix.upper()}.")
+    if suffix in document_extractor.SUPPORTED_IMAGE_FORMATS:
+        try:
+            document_extractor.validate_image(name, data)
+        except ValueError as exc:
+            return stop("rejected", str(exc))
     existing = store.find_by_fingerprint(sha)
     if existing:
         store.log_event("duplicate_rejected", existing, {"filename": name, "existing_id": existing}, actor())
@@ -835,14 +876,35 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
     if extraction.warnings:
         say(":orange[Attention : " + ", ".join(extraction.warnings) + "]")
 
+    profile_result = {"profile": {}}
+    profile_warning = None
+
     say("Analyse par le moteur local (attributs protégés exclus du texte évalué)…")
     analysis = quality.prepare_analysis(raw, app.analyzer, role_info, criteria_label, extraction=extraction)
     if analysis.get("error"):
         return stop("error", analysis["error"])
     if analysis.get("document_type") != "resume":
         return stop("rejected", f"Le document ne ressemble pas à un CV (type détecté : {analysis.get('document_type')}).")
-    meta = analysis["sothema"]
 
+    if getattr(app.ai_analyzer, "openai_client", None):
+        say("Extraction IA du profil (champs présents uniquement, vérification contre le texte source)…")
+        profile_result = app.ai_analyzer.extract_candidate_profile(
+            raw, header_context=quality.profile_header_context(extraction)
+        )
+        if profile_result.get("profile"):
+            try:
+                analysis = quality.apply_ai_profile(
+                    analysis, profile_result["profile"], raw,
+                    name_source_text=quality.profile_header_context(extraction),
+                )
+                say(":green[Profil IA vérifié contre le texte extrait.]")
+            except ValueError as exc:
+                profile_warning = f"Profil IA ignoré : {exc}"
+        else:
+            profile_warning = profile_result.get("error", "Extraction IA du profil indisponible.")
+        if profile_warning:
+            say(f":orange[{md(profile_warning)} — vérification RH nécessaire.]")
+    meta = analysis["sothema"]
     backend_label = "Supabase Storage et Postgres" if store.backend_name() == "supabase" else "SQLite"
     say(f"Enregistrement {backend_label} : fichier original, texte, analyse et entrée d'audit…")
     try:
@@ -863,6 +925,7 @@ def ingest_file(app, filename, data, role_info, criteria_label, say):
     result = {
         "outcome": "saved", "filename": name, "candidate_id": candidate_id, "probable": probable,
         "message": "Prêt pour revue", "extraction": extraction.as_dict(),
+        "profile_warning": profile_warning,
     }
     return result
 
@@ -899,6 +962,9 @@ def _import_results():
                                f"{plural(len(quality_meta(analysis)['skills']), 'compétence')} repérée(s) · "
                                f"{extraction.get('page_count', 1)} page(s) · {md(methods)}"
                                + (f" · {md(warning_text)}" if warning_text else ""))
+                    if item.get("profile_warning"):
+                        st.warning(md(item["profile_warning"]) + " — vérification manuelle du profil requise.",
+                                   icon=":material/person_search:")
                     if st.button("Ouvrir pour revue", icon=":material/open_in_new:", key=f"import_open_{index}"):
                         goto("dossier", id=row["id"])
                 elif item["outcome"] == "duplicate":
@@ -931,16 +997,17 @@ def page_dossier(app):
     cid = row["id"]
     analysis = parse_json(row["local_analysis_json"])
     raw_text = row["raw_text"] or ""
-    meta = quality_meta(analysis, raw_text, row["full_name"] or "")
+    profile = analysis.get("ai_profile") or {}
+    canonical_name = profile.get("name") or row["full_name"] or analysis.get("name") or ""
+    meta = quality_meta(analysis, raw_text, canonical_name)
     confidence = row["confidence"] if row["confidence"] is not None else meta.get("confidence")
     score = row["score"] if row["score"] is not None else analysis.get("ats_score")
-    title = row["full_name"] or "Nom non détecté"
+    title = canonical_name or "Nom non détecté"
 
     actions = header_with_actions(title, f"{row['source_filename']} · {human_size(row['file_size'])} · "
                                   f"importé le {fmt_dt(row['created_at'])}", crumbs=["CVthèque", f"Dossier #{cid}"])
     with actions:
-        mime = "application/pdf" if row["file_type"] == "pdf" else \
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        mime = document_extractor.FILE_MIME_TYPES.get(row["file_type"], "application/octet-stream")
         original = store.get_original_file(dict(row))
         st.download_button("CV original", original or b"", row["source_filename"], mime,
                            icon=":material/download:", key="dossier_download", disabled=not original,
@@ -1001,6 +1068,8 @@ def page_dossier(app):
 
 def _dossier_identity(row, analysis, meta):
     fields = meta.get("field_confidence") or {}
+    profile = analysis.get("ai_profile") or {}
+    canonical_name = profile.get("name") or row["full_name"] or analysis.get("name") or ""
     with st.container(border=True, key="card-dossier-identity"):
         st.subheader("Informations extraites")
 
@@ -1010,11 +1079,13 @@ def _dossier_identity(row, analysis, meta):
             return f"<dt>{dot}{esc(label)}</dt><dd>{shown}</dd>"
 
         st.html('<dl class="so-kv">' + "".join([
-            item("Nom", meta.get("name") or row["full_name"], "name"),
-            item("E-mail", row["email"], "email"),
-            item("Téléphone", row["phone"], "phone"),
-            item("LinkedIn", analysis.get("linkedin")),
-            item("GitHub", analysis.get("github")),
+            item("Nom", canonical_name, "name"),
+            item("E-mail", row["email"] or profile.get("email") or analysis.get("email"), "email"),
+            item("Téléphone", row["phone"] or profile.get("phone") or analysis.get("phone"), "phone"),
+            item("Localisation", profile.get("location")),
+            item("Fonction / titre", profile.get("headline") or row["target_role"]),
+            item("LinkedIn", analysis.get("linkedin") or profile.get("linkedin")),
+            item("GitHub", analysis.get("github") or profile.get("github")),
             item("Critères de poste", row["target_role"] or "Analyse générale"),
         ]) + "</dl>")
         st.caption("Confiance par champ : " + " · ".join(
@@ -1143,13 +1214,44 @@ def _dossier_ai(app, row, raw_text, analysis):
     stored = parse_json(row["ai_analysis_json"])
     configured = bool(getattr(app.ai_analyzer, "openai_client", None))
     with st.container(border=True, key="card-dossier-ai"):
-        st.subheader("Analyse IA (facultative)")
+        st.subheader("Profil IA et analyse facultative")
         if not configured:
-            st.warning("Ajoutez OPENAI_API_KEY dans utils/.env pour activer l'analyse IA. L'analyse locale reste la "
+            st.warning("Ajoutez OPENAI_API_KEY dans utils/.env pour activer l'extraction du profil. L'analyse locale reste la "
                        "référence.", title="Clé API OpenAI manquante", icon=":material/key:")
         else:
-            st.caption("Le texte envoyé est pseudonymisé (nom, e-mail, téléphone, liens) et débarrassé des attributs "
-                       "protégés ; le fichier original n'est jamais transmis.")
+            st.caption("L'extraction du profil lit le CV original pour corriger le nom et les informations présentes. "
+                       "Les valeurs sont vérifiées contre le texte et restent à valider par RH.")
+            if st.button("Réextraire le profil avec l'IA", icon=":material/person_search:", type="primary",
+                         key="dossier_profile_reextract", help="Corrige le nom et les champs du profil sans modifier le score ni la confiance."):
+                original = store.get_original_file(dict(row))
+                if not original:
+                    st.error("Le CV original est indisponible : le profil n'a pas été modifié.", title="Réextraction impossible")
+                else:
+                    with st.spinner("Lecture du CV et extraction du profil…"):
+                        try:
+                            extraction = document_extractor.extract_document(row["source_filename"], original)
+                            profile_text = extraction.display_text or extraction.normalized_text or raw_text
+                            result = app.ai_analyzer.extract_candidate_profile(
+                                profile_text, header_context=quality.profile_header_context(extraction)
+                            )
+                            if result.get("profile"):
+                                updated = quality.apply_ai_profile(
+                                    analysis, result["profile"], profile_text,
+                                    name_source_text=quality.profile_header_context(extraction),
+                                )
+                                verified = updated.get("ai_profile") or {}
+                                canonical_name = verified.get("name") or row["full_name"] or updated.get("name") or ""
+                                canonical_email = verified.get("email") or row["email"] or updated.get("email") or ""
+                                canonical_phone = verified.get("phone") or row["phone"] or updated.get("phone") or ""
+                                store.update_profile(cid, updated, full_name=canonical_name, email=canonical_email,
+                                                     phone=canonical_phone, summary=updated.get("summary", ""), actor=actor())
+                                st.toast("Profil réextrait et enregistré — score et confiance inchangés", icon=":material/check:")
+                                st.rerun()
+                            else:
+                                st.error(result.get("error", "Aucun profil vérifiable n'a été retourné."),
+                                         title="Profil IA indisponible")
+                        except (ValueError, OSError, RuntimeError) as exc:
+                            st.error(f"Profil IA non enregistré : {exc}", title="Réextraction impossible")
             if st.button("Lancer l'analyse IA", icon=":material/auto_awesome:", key="dossier_ai_run"):
                 with st.spinner("Analyse IA en cours…"):
                     label = row["target_role"] or None

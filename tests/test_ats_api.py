@@ -84,7 +84,18 @@ def test_authenticated_invalid_upload_keeps_validation_contract(client, monkeypa
     assert response.json["error"] == "File signature is invalid or the file is empty"
 
 
-def test_authenticated_upload_preserves_duplicate_response(client, monkeypatch):
+def test_authenticated_image_signature_is_validated(client, monkeypatch):
+    monkeypatch.setenv("SOTHEMA_INGEST_API_TOKEN", "test-secret-token")
+    response = client.post(
+        "/api/candidates/upload",
+        headers={"Authorization": "Bearer test-secret-token"},
+        data={"file": (io.BytesIO(b"not an image"), "cv.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "image" in response.json["error"].lower()
+
+
     monkeypatch.setenv("SOTHEMA_INGEST_API_TOKEN", "test-secret-token")
     extraction = SimpleNamespace(normalized_text="CV text", as_dict=lambda: {"page_count": 1})
     monkeypatch.setattr(ats_api.document_extractor, "extract_document", lambda *_args: extraction)

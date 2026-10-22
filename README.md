@@ -6,10 +6,11 @@ Private collaboration repository for Sothema's HR manager Applicant Tracking Sys
 
 Sothema HR Intelligence is a Streamlit application for authorized RH managers and recruiters. It provides a local CVthèque where teams can:
 
-- import real PDF and DOCX CVs;
-- extract text from ordinary and designed CVs, including columns and tables;
+- import real PDF, DOCX, and common raster-image CVs (PNG, JPG/JPEG, TIFF, BMP, GIF, WebP);
+- extract text from designed CVs and scanned images using layout-aware parsing and server-side OCR;
 - analyze CV structure with the local `ResumeAnalyzer`;
 - review advisory scores, confidence, evidence, and extraction warnings;
+- extract source-verified candidate profile details with optional AI, for human review;
 - search and filter imported dossiers;
 - assign RH review statuses and validate analyses;
 - keep original files, analysis results, and audit events in SQLite locally or Supabase Postgres/Storage when hosted;
@@ -37,7 +38,7 @@ Important modules:
 
 - `app.py` — Streamlit entrypoint and active RH navigation.
 - `sothema_views.py` — dashboard, CVthèque, import, dossier, settings, audit, and review workflows.
-- `utils/document_extractor.py` — column/table-aware extraction, DOCX XML parsing, provenance, OCR status.
+- `utils/document_extractor.py` — PDF/DOCX/image extraction, column/table awareness, provenance, and OCR.
 - `sothema_quality.py` — protected-attribute exclusion, confidence, document signals, pseudonymization, evidence.
 - `utils/resume_analyzer.py` — existing local ATS-style advisory analyzer.
 - `ats_store.py` — backend-neutral candidate storage, duplicate detection, audit log, exports and backups (SQLite locally; Supabase hosted).
@@ -107,9 +108,18 @@ service_role_key = "<server-only-service-role-key>"
 storage_bucket = "candidate-cvs"
 ```
 
-4. Save and deploy. Root `packages.txt` requests Poppler and Tesseract system tools for PDF fallback/OCR. If Community Cloud cannot install a package, text-based PDF/DOCX extraction still works, but scanned/image-only PDFs may need manual review.
+4. Save and deploy. Root `packages.txt` requests Poppler and Tesseract system tools for PDF fallback, scanned PDF OCR, and raster-image CV OCR. Supported image formats are PNG, JPG/JPEG, TIFF, BMP, GIF and WebP. If Community Cloud cannot install a package, image-only CVs will be marked as requiring manual review.
 5. Open the app and confirm **Paramètres → Données** reports the Supabase Postgres + Storage backend as healthy. Then create the initial RH administrator through the setup screen. No candidate or admin demo accounts are seeded.
 6. Test with synthetic CV files first: upload, exact duplicate, restart/persistence, original-file download, review/audit, and deletion. Confirm the original object disappears from the private bucket after deletion.
+
+### Update an existing hosted project for AI profile re-extraction and image CVs
+
+After the first deployment, apply the additive SQL migrations in order in the Supabase SQL Editor:
+
+1. [`supabase/migrations/002_profile_reextraction.sql`](supabase/migrations/002_profile_reextraction.sql) enables audited per-dossier profile re-extraction.
+2. [`supabase/migrations/003_image_cv_types.sql`](supabase/migrations/003_image_cv_types.sql) allows supported raster image types in ATS records and the still-private originals bucket.
+
+Then deploy the updated application and API code. Confirm the hosting environment has Pillow, Tesseract, and the required language packs (`eng` and `fra`). The profile action and image uploads depend on both the code update and these migrations; no migration runs automatically from GitHub.
 
 ### Proof-of-concept limitations
 
