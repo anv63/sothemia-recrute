@@ -27,18 +27,39 @@ import re
 
 
 class AIResumeAnalyzer:
+    @staticmethod
+    def _setting(name):
+        """Read local environment first, then server-side Streamlit AI secrets."""
+        value = os.getenv(name)
+        if value:
+            return value
+        try:
+            for section_name in ("ai", "openai"):
+                section = st.secrets.get(section_name)
+                if section:
+                    for key in (name.lower(), name):
+                        value = section.get(key)
+                        if value:
+                            return str(value)
+            for key in (name, name.lower()):
+                value = st.secrets.get(key)
+                if value:
+                    return str(value)
+        except Exception:
+            pass
+        return ""
     def __init__(self):
         # Load environment variables
         load_dotenv()
         
         # Configure AI providers
-        self.google_api_key = os.getenv("GOOGLE_API_KEY")
-        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        
-        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-        self.openai_base_url = os.getenv("OPENAI_BASE_URL") or None
+        self.google_api_key = self._setting("GOOGLE_API_KEY")
+        self.anthropic_api_key = self._setting("ANTHROPIC_API_KEY")
+        self.openai_api_key = self._setting("OPENAI_API_KEY")
+        self.openrouter_api_key = self._setting("OPENROUTER_API_KEY")
+
+        self.openai_model = self._setting("OPENAI_MODEL") or "gpt-5-mini"
+        self.openai_base_url = self._setting("OPENAI_BASE_URL") or None
         self.openai_client = OpenAI(api_key=self.openai_api_key, base_url=self.openai_base_url,
                                     timeout=90.0, max_retries=0) if self.openai_api_key and OpenAI else None
         self.anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
