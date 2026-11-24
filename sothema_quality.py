@@ -66,6 +66,11 @@ _NOT_A_NAME = {
     "expérience", "education", "formation", "skills", "compétences", "objective", "objectif", "professional",
     "professionnel", "management", "services", "service", "customer", "account", "project", "projet",
     "teaching", "fitness", "trainer", "instructor", "public", "relations", "aviation", "automobile",
+    "qualifications", "core", "work", "history", "duties", "responsibilities", "highlights", "overview",
+    "accomplishments", "activities", "affiliations", "interests", "hobbies", "references", "controller",
+    "position", "general", "generalist", "details", "background", "coursework", "certifications", "licenses",
+    "publications", "awards", "honors", "strengths", "capabilities", "competencies", "key", "knowledge",
+    "schooling", "reputation", "products", "driven", "so", "on", "state", "city", "country", "address",
 }
 
 FIELD_LABELS = {
@@ -230,6 +235,8 @@ def sanitize_query(query):
 def plausible_name(value):
     value = (value or "").strip()
     if not value or len(value) > 60 or "@" in value or any(ch.isdigit() for ch in value):
+        return False
+    if any(ch in value for ch in ".,:;!?|/\\()[]{}*+=_~^$#@%&<>"):
         return False
     words = re.findall(r"[A-Za-zÀ-ÿ'’\-]+", value)
     if not 2 <= len(words) <= 5 or len(words) != len(value.split()):

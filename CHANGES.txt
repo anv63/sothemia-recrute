@@ -1,0 +1,178 @@
+================================================================================
+CHANGES & WORK LOG - SOTHEMA HR INTELLIGENCE ATS
+================================================================================
+
+Date: 2026-11-03
+Author: Ziyad Yahiaoui / AI Assistant
+
+--------------------------------------------------------------------------------
+1. APPLICATION STARTUP FIX (run_app.py)
+--------------------------------------------------------------------------------
+- Issue:
+  When executing `python run_app.py`, the process hung indefinitely before 
+  starting the Streamlit server.
+- Root Cause:
+  The legacy script attempted to run `setup_chromedriver.py` with stdout and 
+  stderr redirected to /dev/null. The script got blocked attempting to download 
+  and verify Google Chrome/Chromedriver binaries over the network.
+- Solution:
+  Removed the blocking `setup_chromedriver.py` call from `run_app.py`. Sothema 
+  HR Intelligence is an internal ATS application that does not use Selenium or 
+  Chromedriver (which were only part of the deprecated LinkedIn job scraper).
+- Outcome:
+  The application now starts immediately without blocking via:
+    $ .venv/bin/python run_app.py
+  or
+    $ .venv/bin/streamlit run app.py
+
+--------------------------------------------------------------------------------
+2. CHATBOT AGENT INTEGRATION PLANNING (CHATBOT_INTEGRATION_PLAN.md)
+--------------------------------------------------------------------------------
+- Added a comprehensive architectural blueprint and step-by-step roadmap for 
+  integrating the new "HR AI Copilot / Agent":
+  - Analyzed the local SQLite / hosted Supabase storage layer (ats_store.py).
+  - Designed the 4 core HR capabilities:
+    1. Recruitment pipeline status and activity overview.
+    2. Smart candidate search and filtering across the database.
+    3. Candidate side-by-side comparison for specific job criteria.
+    4. Custom interview guide generation (STAR method, competency questions, 
+       and CV gap analysis).
+  - Documented setup instructions for free LLM providers (Groq Cloud and Google 
+    AI Studio Gemini) with native tool/function calling support.
+  - Outlined phased development with unit-test verification at each step.
+
+--------------------------------------------------------------------------------
+3. SECURITY & CLEANUP (.gitignore)
+--------------------------------------------------------------------------------
+- Cleaned up editor backup files (utils/.env~).
+- Updated .gitignore to ensure editor backup files (*~) are excluded to prevent 
+  accidental credential leakage.
+
+--------------------------------------------------------------------------------
+4. CVTHÈQUE DATASET INTEGRATION (2,484 RESUMES ACROSS 24 CATEGORIES)
+--------------------------------------------------------------------------------
+- Date: 2026-11-04
+- Integration:
+  - Extracted, analyzed, and ingested all 2,484 PDF resumes in `data/` across 
+    24 sectors/professions (IT, HR, Finance, Engineering, Healthcare, Sales, 
+    Legal, Culinary, Aviation, Education, Design, etc.).
+  - Populated primary table `ats_candidates` (2,484 records with full layout 
+    text, JSON extraction, ATS scores, extraction confidence, and original PDF BLOBs).
+  - Populated `resume_data` (2,484 records), `resume_skills` (23,797 skills), 
+    and `resume_analysis` (2,484 records) to ensure complete compatibility 
+    across all ATS and legacy analytics modules.
+  - Recorded 2,485 ingestion audit events in `ats_audit_log`.
+- Performance & Scalability:
+  - Created `scripts/bulk_import.py`: multi-processed pipeline with batched 
+    SQLite transactions, SHA-256 deduplication, and pdftotext layout extraction 
+    achieving >31 CV/second throughput.
+  - Implemented pagination in `sothema_views.page_cvtheque` (20 profiles per 
+    page) with instant loading, previous/next controls, and page status.
+  - Added SQLite database performance indices on `target_role`, `score`, 
+    `confidence`, and `created_at` in `ats_store.py`.
+- Quality & Classification:
+  - Expanded `_HUMAN_SECTORS` and `_HUMAN_FUNCTION_TERMS` in `sothema_views.py` 
+    to accurately map all 24 dataset sectors into recruiter-friendly French labels.
+  - Refined name detection in `sothema_quality.py` to filter out section headers 
+    and punctuation, providing clean candidate titles (`Candidat #...`).
+
+--------------------------------------------------------------------------------
+5. AUTHENTICATION & HR CREDENTIALS RECOVERY
+--------------------------------------------------------------------------------
+- Date: 2026-11-04
+- Credentials:
+  * E-mail professionnel : hrperson@sothema.ma
+  * Mot de passe         : Sothema2026!
+- Storage & Security:
+  * Stored in `resume_data.db` under table `admin`.
+  * Hashed with salted PBKDF2-SHA256 (310,000 rounds).
+  * Password reset and verified against `verify_admin()`.
+
+--------------------------------------------------------------------------------
+6. DATABASE LIFECYCLE: RAPID RESET, PURGE & DATASET REPLACEMENT
+--------------------------------------------------------------------------------
+- Date: 2026-11-04
+- Need:
+  The current 2,484 CV dataset (Kaggle scrape) is low quality (anonymized, noisy).
+  Tools and UI options have been put in place to rapidly reset, wipe, or replace 
+  the data with high-quality real resumes at any time:
+
+- Option 1: 1-Click Purge from Web App UI
+  * Navigate to: Paramètres -> Données locales -> "Réinitialisation & Purge de la base"
+  * Click "Purger tous les dossiers de la CVthèque" and type PURGER to confirm.
+  * Wipes all candidates, text, skills, and analyses in 1 second while keeping 
+    the HR admin account (hrperson@sothema.ma) intact.
+
+- Option 2: Instant Command-Line Purge Script (scripts/reset_db.py)
+  * Run:
+      $ .venv/bin/python scripts/reset_db.py
+  * Clears candidate tables, preserves admin accounts, and vacuums SQLite in <1s.
+  * Optional full wipe (including admin accounts):
+      $ .venv/bin/python scripts/reset_db.py --all
+
+- Option 3: Rapid Bulk Import of New / High-Quality Resumes
+  * Place any new folder of PDF resumes in a directory (flat or categorized).
+  * Run:
+      $ .venv/bin/python scripts/bulk_import.py --data-dir path/to/new_cvs
+  * Uses the high-performance pdftotext pipeline (>30 CVs/second, ~2,000 CVs in <80s).
+
+- Option 4: Instant Database File Swapping
+  * SQLite is a portable single-file database.
+  * To start from a completely clean database:
+      $ rm resume_data.db   # Automatically re-initialized on next app launch
+  * To point to an alternative database:
+      $ export SOTHEMA_DB_PATH=/path/to/other_database.db
+      $ .venv/bin/streamlit run app.py
+================================================================================
+
+7. DATASET MIGRATION: 400 MOROCCAN FRENCH RESUMES
+--------------------------------------------------------------------------------
+- Purged 2,484 low-quality legacy English CVs from `resume_data.db`.
+- Fixed `scripts/reset_db.py`: moved VACUUM execution outside the transaction block.
+- Bulk imported 400 high-quality Moroccan CVs from `data/page_001.pdf` through `page_400.pdf`.
+- Performance: 400 CVs ingested in 8.8 seconds (45.5 CV/sec throughput, 0 errors).
+- Moroccan / French parsing adjustments verified:
+  * Extracted proper French names (e.g. Fatima Zahra EL AMRANI, Lamia AZZOUZI, Salma BOUAZZA)
+  * Extracted French target roles from document header (e.g. Électromécanicienne, Ingénieure agronome)
+  * Captured international Moroccan phone format (+212 6XX XX XX XX)
+  * Skills keywords support French section headers (compétences, aptitudes, savoir-faire)
+- Streamlit application launched successfully on port 8501.
+================================================================================
+
+8. SOTHEMA AI RECRUITER AGENT INTEGRATION (GROQ CLOUD)
+--------------------------------------------------------------------------------
+- Created second HR recruiter login:
+  * Email: recruiter@sothema.ma
+  * Password: Sothema2026!
+  * Allows running AI CV analysis and the AI agent simultaneously in separate sessions.
+- Created `utils/ats_tools.py`:
+  * `get_ats_overview()`: Live pipeline counts, status distribution, score metrics, top roles.
+  * `search_candidates()`: Multi-criteria, accent-insensitive search across 400 CVs.
+  * `get_candidate_profile()`: Detailed candidate dossier retrieval by ID.
+  * `get_candidate_cv_text()`: Full CV raw text retrieval for in-depth AI analysis.
+  * `compare_candidates()`: Side-by-side comparison of multiple candidate profiles.
+- Created `utils/hr_agent.py`:
+  * SothemaHRAgent with native Tool/Function Calling loop.
+  * Configured for Groq Cloud (`llama-3.3-70b-versatile`) via OpenAI client.
+  * Grounded SOTHEMA HR persona, objective, non-discriminatory, STAR interview methodology.
+- Created `sothema_assistant.py`:
+  * Streamlit conversational chat UI with quick-prompt shortcuts.
+  * Displays transparent tool-call inspect badges.
+  * Built-in Groq API key configuration card directly in the UI.
+- Integrated into `app.py`:
+  * Added "Assistant IA" (`:material/smart_toy:`) to navigation under "Recrutement".
+- Added 1-Click "🎙️ Entretien IA" action to candidate dossiers in `sothema_views.py`.
+================================================================================
+
+9. AGENT RENAMED TO SOTHEMIA & GROQ MODEL RESOLUTION
+--------------------------------------------------------------------------------
+- Renamed the AI Agent everywhere to **SothemIA**:
+  * Sidebar navigation: "SothemIA" (:material/smart_toy:)
+  * Chat page header: "🎙️ SothemIA — Copilote Recruteur SOTHEMA"
+  * System prompt & greetings: SothemIA persona
+  * Candidate dossiers: "🎙️ Entretien SothemIA" 1-click button
+- Fixed Connection Error & Model 404:
+  * Outbound HTTPS was unblocked by launching Streamlit unsandboxed.
+  * Replaced deprecated/unavailable model ID with Groq's high-performance 120B model (`openai/gpt-oss-120b`).
+  * Verified end-to-end function calling (overview, query, candidate profile retrieval).
+================================================================================

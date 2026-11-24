@@ -78,6 +78,9 @@ def init_ats_db():
         connection.executescript("""
             CREATE INDEX IF NOT EXISTS ix_ats_candidates_email ON ats_candidates(email);
             CREATE INDEX IF NOT EXISTS ix_ats_candidates_review ON ats_candidates(review);
+            CREATE INDEX IF NOT EXISTS ix_ats_candidates_role ON ats_candidates(target_role);
+            CREATE INDEX IF NOT EXISTS ix_ats_candidates_score ON ats_candidates(score);
+            CREATE INDEX IF NOT EXISTS ix_ats_candidates_confidence ON ats_candidates(confidence);
             CREATE INDEX IF NOT EXISTS ix_ats_audit_candidate ON ats_audit_log(candidate_id);
         """)
 
@@ -483,6 +486,25 @@ def delete_candidates(candidate_ids, actor=""):
                 connection.execute("DELETE FROM ats_candidates WHERE id=?", (candidate_id,))
                 _audit(connection, "candidate_deleted", candidate_id,
                        {"filename": row["source_filename"], "sha256": row["fingerprint"]}, actor)
+    finally:
+        connection.close()
+
+
+def purge_all_candidates(actor=""):
+    """Purge all candidate records, skills, and analyses; preserves admin accounts."""
+    if backend_name() == "supabase":
+        rows = list_candidates()
+        if rows:
+            delete_candidates([r["id"] for r in rows], actor)
+        return
+    connection = conn()
+    try:
+        with connection:
+            connection.execute("DELETE FROM ats_candidates")
+            connection.execute("DELETE FROM resume_data")
+            connection.execute("DELETE FROM resume_skills")
+            connection.execute("DELETE FROM resume_analysis")
+            _audit(connection, "cvtheque_purged", None, {"actor": actor}, actor)
     finally:
         connection.close()
 

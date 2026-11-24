@@ -13,21 +13,7 @@ def main():
     """Main function to set up chromedriver and run the application"""
     print("Starting Smart AI Resume Analyzer...")
     
-    # Run the chromedriver setup script silently
-    setup_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup_chromedriver.py")
-    
-    if os.path.exists(setup_script):
-        try:
-            # Run the setup script with output redirected to null
-            with open(os.devnull, 'w') as devnull:
-                subprocess.run(
-                    [sys.executable, setup_script],
-                    stdout=devnull,
-                    stderr=devnull
-                )
-        except Exception:
-            # Silently continue even if setup fails
-            pass
+    # Sothema HR Intelligence does not require chromedriver (internal ATS mode)
     
     # Start the Streamlit application
     print("Starting application...")

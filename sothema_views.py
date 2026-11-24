@@ -50,19 +50,37 @@ _HUMAN_SECTORS = {
     "rh": "Ressources humaines",
     "it": "Informatique / data",
     "juridique": "Juridique",
+    "sante": "Santé / médical",
+    "ingenierie": "Ingénierie / BTP",
+    "enseignement": "Enseignement / formation",
+    "design": "Design / arts / médias",
+    "restauration": "Hôtellerie / restauration",
+    "transport": "Transport / aviation / auto",
+    "agriculture": "Agriculture / agroalimentaire",
+    "consulting": "Conseil / stratégie",
+    "bpo": "Relation client / BPO",
 }
 _HUMAN_SECTOR_TERMS = {
     "qualite": ("qualité", "quality", "assurance qualité", "quality assurance", "gmp", "capa", "qms"),
     "production": ("production", "manufacturing", "opérations", "operations", "process engineer"),
-    "laboratoire": ("laboratoire", "laboratory", "lab", "r&d", "research", "recherche", "chimie"),
+    "laboratoire": ("laboratoire", "laboratory", " r&d", "recherche et développement", "chercheur", "chimie", "biochimie"),
     "reglementaire": ("réglementaire", "reglementaire", "regulatory", "compliance", "pharmacovigilance"),
     "supply": ("supply chain", "logistique", "logistics", "procurement", "achats", "stock", "approvisionnement"),
     "commercial": ("commercial", "sales", "vente", "business development", "account manager"),
-    "marketing": ("marketing", "communication", "brand", "digital marketing"),
-    "finance": ("finance", "financier", "comptabilité", "comptabilite", "accounting", "audit"),
+    "marketing": ("marketing", "communication", "brand", "digital marketing", "public relations"),
+    "finance": ("finance", "financier", "comptabilité", "comptabilite", "accounting", "accountant", "banking", "banque", "bancaire", "audit"),
     "rh": ("ressources humaines", "ressource humaine", "human resources", "recrutement", "talent", "hr", "rh"),
-    "it": ("informatique", "software", "développeur", "developer", "data", "it ", "python", "sql", "cyber"),
-    "juridique": ("juridique", "legal", "lawyer", "avocat", "contract"),
+    "it": ("informatique", "software", "développeur", "developer", "data", "it ", "python", "sql", "cyber", "information technology"),
+    "juridique": ("juridique", "legal", "lawyer", "avocat", "advocate", "contract", "droit"),
+    "sante": ("santé", "sante", "healthcare", "médical", "medical", "infirmier", "nurse", "physician", "doctor"),
+    "ingenierie": ("ingénierie", "ingenierie", "ingénieur", "electromécanique", "électromécanique", "maintenance industrielle", "engineering", "construction", "civil engineer", "mechanical", "btp"),
+    "enseignement": ("enseignement", "teacher", "professeur", "education", "formation", "school", "faculty"),
+    "design": ("design", "designer", "graphisme", "graphic", "arts", "creative", "apparel", "digital media", "media"),
+    "restauration": ("restauration", "chef", "culinary", "cuisine", "restaurant", "hospitality"),
+    "transport": ("transport", "aviation", "aéronautique", "aeronautique", "automobile", "pilot", "automotive"),
+    "agriculture": ("agriculture", "agronomie", "agronome", "agricole", "agri", "farming", "crop"),
+    "consulting": ("consultant", "consulting", "conseil", "strategy", "stratégie"),
+    "bpo": ("bpo", "call center", "customer support", "service client", "téléconseiller"),
 }
 _HUMAN_FUNCTION_TERMS = {
     "Assurance qualité": ("responsable qualité", "quality assurance", "assurance qualité", "quality manager", "qa manager", "qa engineer", "qa specialist", "qa officer"),
@@ -71,10 +89,16 @@ _HUMAN_FUNCTION_TERMS = {
     "Laboratoire / R&D": ("technicien de laboratoire", "laboratory technician", "lab technician", "chercheur", "researcher", "r&d scientist", "laboratory analyst"),
     "Supply chain / logistique": ("supply chain manager", "logistics manager", "responsable logistique", "approvisionneur", "acheteur", "procurement specialist"),
     "Commercial / vente": ("commercial", "sales representative", "sales manager", "account manager", "business developer", "business development"),
-    "Marketing / communication": ("marketing manager", "responsable marketing", "marketing specialist", "communication manager", "brand manager"),
-    "Finance / comptabilité": ("comptable", "accountant", "financial analyst", "finance manager", "auditeur", "auditor", "contrôleur de gestion"),
+    "Marketing / communication": ("marketing manager", "responsable marketing", "marketing specialist", "communication manager", "brand manager", "public relations"),
+    "Finance / comptabilité": ("comptable", "accountant", "financial analyst", "finance manager", "auditeur", "auditor", "contrôleur de gestion", "banker"),
     "Ressources humaines": ("responsable rh", "hr manager", "human resources", "recruteur", "recruiter", "talent acquisition"),
     "Informatique / data": ("software engineer", "développeur", "developer", "data analyst", "data scientist", "system administrator", "it manager"),
+    "Ingénierie / BTP": ("ingénieur", "engineer", "conducteur de travaux", "construction manager", "architect"),
+    "Santé / médical": ("praticien", "médecin", "infirmier", "nurse", "soignant", "pharmacist"),
+    "Enseignement": ("enseignant", "professeur", "teacher", "formateur", "instructor"),
+    "Design / création": ("designer", "directeur artistique", "graphic designer", "illustrateur"),
+    "Restauration": ("chef cuisinier", "chef", "cuisinier", "cook", "restaurateur"),
+    "Juridique": ("avocat", "juriste", "legal counsel", "advocate"),
 }
 _EXPERIENCE_LEVELS = {
     "Débutant / junior": ("junior", "débutant", "debutant", "entry level", "intern", "stagiaire", "stage", "0-2 ans"),
@@ -108,12 +132,12 @@ def _profile_facets(analysis, raw_text="", target_role=""):
     education = " ".join(str(value) for value in (analysis.get("education") or []))
     experience = " ".join(str(value) for value in (analysis.get("experience") or []))
     skills = " ".join(str(value) for value in (meta.get("skills") or analysis.get("skills") or []))
-    corpus = " ".join((raw_text, education, experience, skills))
+    corpus = " ".join((target_role, raw_text, education, experience, skills))
     sector = _first_matching_label(corpus, _HUMAN_SECTOR_TERMS, _HUMAN_SECTORS)
     level = _first_matching_label(corpus, _EXPERIENCE_LEVELS)
     education_level = _first_matching_label(education or corpus, _EDUCATION_LEVELS)
     diploma = next((entry.strip() for entry in (analysis.get("education") or []) if str(entry).strip()), "À vérifier")
-    function_text = " ".join((experience, raw_text, skills))
+    function_text = " ".join((target_role, experience, raw_text, skills))
     function = _first_matching_label(function_text, _HUMAN_FUNCTION_TERMS)
     return {"sector": sector, "function": function, "experience_level": level,
             "education_level": education_level, "diploma": diploma[:120]}
@@ -574,7 +598,7 @@ _FILTER_DEFAULTS = {
     "cv_q": "", "cv_review": [], "cv_valid": "Toutes", "cv_sector": [],
     "cv_function": "Toutes", "cv_experience": "Tous", "cv_education": "Tous",
     "cv_diploma": "Tous", "cv_conf": "Toutes", "cv_min_score": 0,
-    "cv_skill": "Toutes",
+    "cv_skill": "Toutes", "cv_page": 1,
 }
 
 
@@ -658,9 +682,34 @@ def page_cvtheque(app):
             st.space("small")
             return
 
+        total_rows = len(rows)
+        page_size = 20
+        total_pages = max(1, (total_rows + page_size - 1) // page_size)
+        cur_page = min(max(1, st.session_state.get("cv_page", 1)), total_pages)
+        st.session_state.cv_page = cur_page
+
+        if total_pages > 1:
+            p_top1, p_top2, p_top3 = st.columns([2, 6, 2], vertical_alignment="center")
+            with p_top1:
+                if st.button("← Précédent", disabled=cur_page <= 1, key="cv_page_prev_top"):
+                    st.session_state.cv_page = cur_page - 1
+                    st.rerun()
+            with p_top2:
+                st.markdown(f"<div style='text-align: center; color: #475569; font-size: 0.95rem; font-weight: 500;'>"
+                            f"Page <b>{cur_page}</b> sur <b>{total_pages}</b> "
+                            f"<span style='color: #94a3b8;'>({total_rows} profils)</span></div>", unsafe_allow_html=True)
+            with p_top3:
+                if st.button("Suivant →", disabled=cur_page >= total_pages, key="cv_page_next_top"):
+                    st.session_state.cv_page = cur_page + 1
+                    st.rerun()
+
+        start_idx = (cur_page - 1) * page_size
+        end_idx = min(start_idx + page_size, total_rows)
+        page_items = rows[start_idx:end_idx]
+
         selected_ids = set()
         with st.container(border=True, key="card-cv-profiles"):
-            for profile_row in rows:
+            for profile_row in page_items:
                 with st.container(border=True, key=f"cv_profile_{profile_row['id']}"):
                     top = st.container(horizontal=True, vertical_alignment="center")
                     with top:
@@ -698,6 +747,20 @@ def page_cvtheque(app):
                             goto("dossier", id=profile_row["id"])
                         if st.checkbox("Sélectionner", key=f"cv_profile_select_{profile_row['id']}"):
                             selected_ids.add(profile_row["id"])
+
+        if total_pages > 1:
+            p_bot1, p_bot2, p_bot3 = st.columns([2, 6, 2], vertical_alignment="center")
+            with p_bot1:
+                if st.button("← Précédent", disabled=cur_page <= 1, key="cv_page_prev_bot"):
+                    st.session_state.cv_page = cur_page - 1
+                    st.rerun()
+            with p_bot2:
+                st.markdown(f"<div style='text-align: center; color: #475569; font-size: 0.95rem; font-weight: 500;'>"
+                            f"Page <b>{cur_page}</b> sur <b>{total_pages}</b></div>", unsafe_allow_html=True)
+            with p_bot3:
+                if st.button("Suivant →", disabled=cur_page >= total_pages, key="cv_page_next_bot"):
+                    st.session_state.cv_page = cur_page + 1
+                    st.rerun()
 
         selected = [r for r in rows if r["id"] in selected_ids]
     if selected:
@@ -777,6 +840,20 @@ def confirm_delete(ids):
             goto("cvtheque")
 
 
+@st.dialog("Purger toute la CVthèque")
+def confirm_purge_all():
+    st.warning("Attention : cette action supprimera définitivement tous les candidats, scores, compétences et CV stockés. "
+               "Votre compte administrateur RH sera conservé.", icon=":material/warning:")
+    typed = st.text_input("Tapez PURGER pour confirmer", key="so_purge_all_confirm")
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("Annuler", key="so_purge_cancel"):
+            st.rerun()
+        if st.button("Confirmer la purge", type="primary", disabled=typed != "PURGER", key="so_purge_go"):
+            store.purge_all_candidates(actor=actor())
+            st.session_state["so_flash"] = "La CVthèque a été vidée avec succès."
+            st.rerun()
+
+
 # --------------------------------------------------------------------------- import
 
 def page_import(app):
@@ -825,6 +902,22 @@ def page_import(app):
                 st.markdown(f"{':green-badge[Clé configurée]' if ok else ':orange-badge[Clé manquante]'} {name}"
                             + (f" · `{model}`" if ok and model else ""))
             st.caption("L'analyse IA est facultative et se lance depuis chaque dossier, sur un texte pseudonymisé.")
+        local_data_dir = Path("data")
+        if local_data_dir.exists():
+            import glob as py_glob
+            local_pdfs = py_glob.glob("data/*/*.pdf")
+            if local_pdfs:
+                with st.container(border=True, key="card-import-local-cvtheque"):
+                    st.subheader("CVthèque locale (data/)")
+                    db_count = store.candidate_count()
+                    st.markdown(
+                        f":material/folder: **{len(local_pdfs)} CV PDF** détectés (24 catégories métier)  \n"
+                        f":material/database: **{db_count}** dossier(s) enregistrés en base"
+                    )
+                    if db_count < len(local_pdfs):
+                        st.caption(f"Synchronisation en cours ({db_count}/{len(local_pdfs)} CV intégrés).")
+                    else:
+                        st.success("La CVthèque locale est intégralement synchronisée.", icon=":material/check_circle:")
 
 
 _OUTCOME_LABEL = {"saved": "Prêt pour revue", "duplicate": "Doublon exact", "rejected": "Refusé", "error": "Erreur"}
@@ -1015,6 +1108,12 @@ def page_dossier(app):
         st.download_button("CV original", original or b"", row["source_filename"], mime,
                            icon=":material/download:", key="dossier_download", disabled=not original,
                            on_click=lambda: store.log_event("original_downloaded", cid, None, actor()))
+        if st.button("🎙️ Entretien SothemIA", icon=":material/smart_toy:", key=f"prep_interview_{cid}"):
+            st.session_state["_agent_prefill_prompt"] = (
+                f"Prépare un guide d'entretien complet (questions métier, questions comportementales STAR "
+                f"et points d'attention) pour le candidat #{cid} : {title} ({row['target_role'] or 'Poste non spécifié'})."
+            )
+            goto("assistant")
         if st.button("Retour", icon=":material/arrow_back:", key="dossier_back"):
             goto("cvtheque")
 
@@ -1380,6 +1479,11 @@ def _settings_data():
         elif stats.get("backend") == "supabase":
             st.info("Les sauvegardes hébergées sont gérées depuis Supabase. Vérifiez le plan de sauvegarde du projet et exportez régulièrement les données de test.",
                     title="Sauvegarde Supabase", icon=":material/cloud_done:")
+        with st.container(border=True, key="card-settings-purge"):
+            st.subheader("Réinitialisation & Purge de la base")
+            st.caption("Si les CV importés sont de mauvaise qualité ou correspondent à un dataset de test, vous pouvez vider la base en un clic pour repartir de zéro tout en conservant votre compte administrateur RH.")
+            if st.button("Purger tous les dossiers de la CVthèque", icon=":material/delete_forever:", key="purge_cvtheque_btn"):
+                confirm_purge_all()
         with st.container(border=True, key="card-settings-engine"):
             st.subheader("État des moteurs d'extraction")
             capabilities = document_extractor.runtime_capabilities()

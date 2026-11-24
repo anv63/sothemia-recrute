@@ -37,6 +37,7 @@ from utils.resume_builder import ResumeBuilder
 from utils.resume_analyzer import ResumeAnalyzer
 from ats_store import init_ats_db
 import sothema_views as views
+from sothema_assistant import render_assistant_page
 from sothema_ui import inject_css
 import traceback
 import plotly.express as px
@@ -2128,6 +2129,7 @@ class ResumeApp:
         st.session_state["_so_pages"] = {
             "dashboard": page(views.page_dashboard, "Tableau de bord", ":material/dashboard:", "tableau-de-bord",
                               default=True),
+            "assistant": page(render_assistant_page, "SothemIA", ":material/smart_toy:", "sothemia"),
             "cvtheque": page(views.page_cvtheque, "CVthèque", ":material/groups:", "cvtheque"),
             "import": page(views.page_import, "Importer des CV", ":material/upload_file:", "import"),
             "dossier": page(views.page_dossier, "Dossier candidat", ":material/person:", "dossier",
@@ -2136,7 +2138,7 @@ class ResumeApp:
         }
         p = st.session_state["_so_pages"]
         current = st.navigation({
-            "Recrutement": [p["dashboard"], p["cvtheque"], p["import"], p["dossier"]],
+            "Recrutement": [p["dashboard"], p["assistant"], p["cvtheque"], p["import"], p["dossier"]],
             "Administration": [p["settings"]],
         }, expanded=True)
         views.sidebar_footer()

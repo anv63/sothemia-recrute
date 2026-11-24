@@ -193,7 +193,7 @@ class ResumeAnalyzer:
         """Extract personal information from resume text"""
         # Basic patterns for personal info
         email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
-        phone_pattern = r'(\+\d{1,3}[-.]?)?\s*\(?\d{3}\)?[-.]?\s*\d{3}[-.]?\s*\d{4}'
+        phone_pattern = r'(?:\+\d{1,3}[\s.-]?)?(?:(?:\d{2,3}[\s.-]?){3,5}\d{2})'
         linkedin_pattern = r'linkedin\.com/in/[\w-]+'
         github_pattern = r'github\.com/[\w-]+'
         
@@ -356,7 +356,8 @@ class ResumeAnalyzer:
             'core competencies', 'professional skills', 'key skills',
             'technical expertise', 'proficiencies', 'qualifications',
             'top skills', 'key skill', 'major skill', 'personal skill',
-            'soft skills', 'soft skill', 'soft skillset'
+            'soft skills', 'soft skill', 'soft skillset',
+            'compétences', 'competences', 'aptitudes', 'savoir-faire'
         ]
         in_skills_section = False
         current_entry = []
