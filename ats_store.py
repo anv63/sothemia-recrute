@@ -300,6 +300,17 @@ def search_candidates(terms):
         connection.close()
 
 
+def get_candidate(candidate_id):
+    if backend_name() == "supabase":
+        rows = supabase_store.rows(supabase_store.table("ats_candidates").select("*").eq("id", candidate_id).limit(1).execute())
+        return _candidate(rows[0]) if rows else None
+    connection = conn()
+    try:
+        return connection.execute("SELECT * FROM ats_candidates WHERE id=?", (candidate_id,)).fetchone()
+    finally:
+        connection.close()
+
+
 def assistant_candidate_rows():
     """Return only ATS fields needed by the RH assistant, across all pages."""
     columns = "id,full_name,target_role,score,review,confidence,summary,raw_text,local_analysis_json,created_at"
