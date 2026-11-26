@@ -300,13 +300,48 @@ def search_candidates(terms):
         connection.close()
 
 
-def get_candidate(candidate_id):
+def assistant_candidate_rows():
+    """Return only ATS fields needed by the RH assistant, across all pages."""
+    columns = "id,full_name,target_role,score,review,confidence,summary,raw_text,local_analysis_json,created_at"
     if backend_name() == "supabase":
-        rows = supabase_store.rows(supabase_store.table("ats_candidates").select("*").eq("id", candidate_id).limit(1).execute())
-        return _candidate(rows[0]) if rows else None
+        rows = []
+        page_size = 500
+        offset = 0
+        while True:
+            page = supabase_store.rows(
+                supabase_store.table("ats_candidates")
+                .select(columns)
+                .order("id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            offset += page_size
     connection = conn()
     try:
-        return connection.execute("SELECT * FROM ats_candidates WHERE id=?", (candidate_id,)).fetchone()
+        return connection.execute(
+            f"SELECT {columns} FROM ats_candidates ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+
+def get_assistant_candidate(candidate_id):
+    """Fetch one candidate without original file bytes or direct contact details."""
+    columns = "id,full_name,target_role,score,review,confidence,summary,raw_text,local_analysis_json,created_at"
+    if backend_name() == "supabase":
+        rows = supabase_store.rows(
+            supabase_store.table("ats_candidates")
+            .select(columns).eq("id", candidate_id).limit(1).execute()
+        )
+        return rows[0] if rows else None
+    connection = conn()
+    try:
+        return connection.execute(
+            f"SELECT {columns} FROM ats_candidates WHERE id=?", (candidate_id,)
+        ).fetchone()
     finally:
         connection.close()
 

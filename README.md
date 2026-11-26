@@ -91,7 +91,7 @@ The hosted app uses Supabase for persistent ATS data because Community Cloud's l
 ### 1. Create and secure Supabase
 
 1. Create a private Supabase project in an appropriate region and save the database password securely.
-2. In Supabase **SQL Editor**, run the complete [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql) migration. It creates the ATS schema, restricts direct table/RPC access to the server service role, and creates the private `candidate-cvs` Storage bucket.
+2. In Supabase **SQL Editor**, run migrations `001_initial.sql`, `002_profile_reextraction.sql`, then `003_image_cv_types.sql` in that order. This provisions the ATS schema, private `candidate-cvs` Storage bucket, and current image-file support.
 3. Confirm Storage shows `candidate-cvs` as **private**. Do not add public read policies or expose the service-role/secret key.
 4. Copy the project URL and the service-role key from Supabase API settings. Treat the latter like a database password.
 
@@ -106,9 +106,17 @@ The hosted app uses Supabase for persistent ATS data because Community Cloud's l
 url = "https://<project-ref>.supabase.co"
 service_role_key = "<server-only-service-role-key>"
 storage_bucket = "candidate-cvs"
+
+# Optional server-only Groq chat assistant configuration
+[groq]
+api_key = "<groq-api-key>"
+model = "openai/gpt-oss-120b"
 ```
 
 4. Save and deploy. Root `packages.txt` requests Poppler and Tesseract system tools for PDF fallback, scanned PDF OCR, and raster-image CV OCR. Supported image formats are PNG, JPG/JPEG, TIFF, BMP, GIF and WebP. If Community Cloud cannot install a package, image-only CVs will be marked as requiring manual review.
+
+The Groq assistant is optional. For local development, set `GROQ_API_KEY` (and optionally `GROQ_MODEL`, `GROQ_BASE_URL`) in the private environment or `utils/.env`. The assistant reads only Groq-specific configuration and does not reuse `OPENAI_API_KEY`. Never enter API keys in the chat page or commit them. The assistant reads candidate data through the same SQLite/Supabase storage facade as the application and removes direct contact identifiers from content sent to Groq.
+
 5. Open the app and confirm **Paramètres → Données** reports the Supabase Postgres + Storage backend as healthy. Then create the initial RH administrator through the setup screen. No candidate or admin demo accounts are seeded.
 6. Test with synthetic CV files first: upload, exact duplicate, restart/persistence, original-file download, review/audit, and deletion. Confirm the original object disappears from the private bucket after deletion.
 
